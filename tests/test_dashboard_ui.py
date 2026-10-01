@@ -20,7 +20,7 @@ def common():
             "operator_contact": "the lab operator",
             "poll_seconds": 8,
             "repository_url": "https://github.com/example/research",
-            "instructions_url": "https://github.com/azhang4216/dmasif-console#researcher-workflow",
+            "instructions_url": "https://github.com/azhang4216/dmasif-experiments#readme",
         },
         "status_labels": {"CHECKING_REQUEST": "Checking request", "SUCCEEDED": "Succeeded"},
     }
@@ -29,7 +29,7 @@ def common():
 def test_empty_history_links_to_repository_instructions_without_browser_write_controls(templates, common):
     page = templates.get_template("history.html").render(**common, runs=[], activity=[], stats={}, filters={})
     assert "Demo · simulated data" in page
-    assert 'href="https://github.com/azhang4216/dmasif-console#researcher-workflow"' in page
+    assert 'href="https://github.com/azhang4216/dmasif-experiments#readme"' in page
     assert "How to run an experiment" in page
     assert 'method="post"' not in page.lower()
     assert 'type="file"' not in page.lower()

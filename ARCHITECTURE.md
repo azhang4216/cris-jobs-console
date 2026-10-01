@@ -255,7 +255,7 @@ Do not delete claims or retry uncertain submissions. A resolved failure is repea
 
 ## 9. Dashboard and result delivery
 
-The unbranded overview starts with a run table and a link to the `dmasif-console` README's **Researcher workflow** section for submission instructions. Keep tutorials out of the dashboard. History has seven columns: **experiment, researcher, commit, dataset, status, received time, runtime**. Filter by researcher, status, and experiment. Link commits to GitHub and runs to details.
+The unbranded overview starts with a run table and a direct link to the `dmasif-experiments` README for submission instructions. Keep tutorials out of the dashboard. History has seven columns: **experiment, researcher, commit, dataset, status, received time, runtime**. Filter by researcher, status, and experiment. Link commits to GitHub and runs to details.
 
 Details prioritize results, logs, timings, and concise run metadata. Configuration, provenance, validation, scheduler IDs, and activity remain available in collapsed sections. Show actionable failures and monitoring issues without routine success banners. Store UTC and display the viewer's timezone explicitly. Commit dates are not job dates. Runtime is blank until the job starts, elapsed while running, and end minus start after completion.
 

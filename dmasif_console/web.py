@@ -156,7 +156,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     public_settings = {"mode": settings.mode, "operator_contact": settings.operator_contact,
                        "poll_seconds": settings.dashboard_poll_seconds, "repository_url": settings.repository.url,
                        "cluster_poll_seconds": settings.poll_seconds,
-                       "instructions_url": "https://github.com/azhang4216/dmasif-console#researcher-workflow"}
+                       "instructions_url": "https://github.com/azhang4216/dmasif-experiments#readme"}
 
     @app.middleware("http")
     async def maintenance_and_headers(request: Request, call_next):

@@ -1,71 +1,15 @@
-# dMaSIF research console
+# dMaSIF console — dashboard and infrastructure
 
-A small GitHub-to-Slurm job service for a research lab. Researchers push experiment branches; a public, read-only dashboard shows who submitted each run, its exact code and configuration, progress, logs, and validated results. The backend holds the cluster credential. Researchers do not need cluster logins or website accounts.
+> [!IMPORTANT]
+> **Do not push experiment code, experiment configurations, or `runs/*` branches to this repository.**
+>
+> **To run an experiment, follow the [dmasif-experiments README](https://github.com/azhang4216/dmasif-experiments#readme).** Make your experiment changes and submit your runs in that repository.
+
+This repository maintains the dashboard and the service that submits jobs to the cluster. The documentation below is for developing and operating that service. The public, read-only dashboard shows each run's researcher, exact code and configuration, progress, logs, and validated results.
 
 The first release supports the existing dMaSIF **feature-extraction** interface. Full training and checkpoint resumption need a later adapter. The local demonstration uses synthetic inputs/features and never executes research code, SSH, or GPU jobs.
 
 **Current free pilot:** the local app receives signed pushes from the private research repository and submits isolated Slurm jobs. A temporary HTTPS tunnel connects GitHub and shares the read-only dashboard. See [the live submission guide](docs/live-submissions.md). The separate [cluster history guide](docs/live-test.md) covers observation without submissions. GitHub Pages cannot run the backend; an always-on host is still needed for permanent deployment.
-
-## Researcher workflow
-
-**Start here: edit these files in [the private dMaSIF research repository](https://github.com/azhang4216/dmasif-experiments).** This `dmasif-console` repository contains the dashboard and submission service. Researchers need access to the research repository and an authorized GitHub account before submitting.
-
-### What do I change?
-
-| I want to… | File to edit in the research repository | What to change |
-| --- | --- | --- |
-| Choose the data, seed, or repeat an experiment | **`experiments/run.yaml`** | `dataset_id`, `seed`, and `repeat_id` |
-| Change the Python computation | **`affinity/extract.py`** | The extraction logic, or project modules it imports |
-| Add my own Python helper | **`affinity/my_experiment.py`** (your chosen filename) **and `affinity/extract.py`** | Add your code, then import and call it from the extractor |
-
-**For a run with different settings, you only need to edit `experiments/run.yaml`.** The existing Python code can stay as it is.
-
-### 1. Set up your run
-
-Create `experiments/run.yaml` in the research repository using the example below. [Downloadable template](config/run.example.yaml).
-
-```yaml
-# EDIT THESE for your experiment:
-dataset_id: demo-1stp-v1  # Use a dataset ID supplied by the operator.
-seed: 0                 # Choose an integer seed.
-repeat_id: first-run    # Use a new label when repeating a run.
-
-# KEEP THESE as shown for the current feature-extraction runner:
-schema_version: 1
-job_type: dmasif_extract
-preset_id: quick-test
-```
-
-`demo-1stp-v1` is the registered one-protein smoke-test dataset in the current pilot. Other datasets need operator registration. Saving changes to this console's `config/run.example.yaml` does not submit an experiment—the request file is **`experiments/run.yaml` in the research repository**.
-
-### 2. Change the code, if needed
-
-The runner executes **`affinity/extract.py` from your submitted commit**. Edit that file or the project modules it uses, such as `model.py`. Commit every changed or newly added helper file alongside it.
-
-A new file such as `affinity/my_experiment.py` runs only when the extractor imports and calls it. There is no `script:` or `command:` option in `run.yaml`. This release supports the existing feature-extraction interface; a standalone training script needs an adapter update.
-
-**Keep the extractor's input/output arguments working, and write results to the supplied `--out` directory.** The service gives every run its own output directory. Keep the existing NPZ result format so the dashboard can validate and download results. New packages or incompatible checkpoint/model changes need a runtime or adapter update with the operator. [Code interface details](docs/researcher.md#changing-python-code).
-
-### 3. Commit and push to submit
-
-From the **research repository** checkout, after making your edits:
-
-```bash
-git switch -c runs/pocket-v1
-# Include any other Python files you changed or added in this command:
-git add experiments/run.yaml affinity/extract.py
-git diff --cached
-git commit -m "Run pocket-v1 feature extraction"
-git push -u origin HEAD
-```
-
-Replace `pocket-v1` with your experiment name. If you added `affinity/my_experiment.py`, for example, include that path in `git add` too. Your username is recorded automatically from GitHub.
-
-**The push submits the job.** A local save or commit alone does not. Each qualifying push to `runs/<experiment>` runs its final commit; ordinary development branches do not submit jobs. Repeat on an existing run branch by changing `repeat_id`, committing, and pushing again. Every run keeps separate outputs.
-
-Open the dashboard and select your run for status, logs, configuration, and downloads. The current pilot is connected to real GitHub pushes and Slurm; the operator must approve each researcher's numeric GitHub ID before that account can submit. The local demo below is a separate simulator.
-
-See [the researcher guide](docs/researcher.md) for configuration limits, results, and troubleshooting.
 
 ## Run the local demo
 

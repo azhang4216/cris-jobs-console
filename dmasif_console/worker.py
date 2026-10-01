@@ -32,6 +32,8 @@ def succeeded(job: dict) -> bool:
 
 class Worker:
     def __init__(self, settings, store: Store | None = None, adapter=None):
+        if settings.mode == "observe":
+            raise ValueError("Observe mode is read-only; use the observe command instead of a worker")
         self.settings = settings
         Path(settings.state_dir).mkdir(parents=True, exist_ok=True)
         self.store = store or Store(settings.database_path)

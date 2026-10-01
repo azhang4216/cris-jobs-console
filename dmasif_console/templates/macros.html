@@ -12,12 +12,12 @@
 
 {% macro run_row(run, labels) -%}
 <tr data-run-id="{{ run.get('id', '') }}" data-actor="{{ run.get('actor_login', '') }}" data-run-status="{{ run.get('state', '') }}" data-experiment="{{ run.get('experiment', '') }}">
-  <td><a class="experiment-link" href="/runs/{{ run.get('id', '') }}" title="Run {{ run.get('id', '') }}">{{ run.get('experiment') or 'Untitled experiment' }}</a></td>
-  <td>{{ run.get('actor_login') or 'Unknown researcher' }}</td>
+  <td><a class="experiment-link" href="/runs/{{ run.get('id', '') }}" title="Run {{ run.get('id', '') }}">{{ run.get('experiment') or 'Untitled experiment' }}</a>{% if run.get('source_kind') == 'slurm' and run.get('scheduler_job_id') %}<span class="cell-secondary">Job {{ run.get('scheduler_job_id') }}</span>{% endif %}</td>
+  <td>{{ run.get('actor_login') or ('—' if run.get('source_kind') == 'slurm' else 'Unknown researcher') }}</td>
   <td>{{ commit_link(run) }}</td>
   <td><span class="dataset-name">{{ run.get('dataset_id') or '—' }}</span></td>
   <td>{{ status_badge(run.get('state', 'CHECKING_REQUEST'), labels) }}</td>
-  <td class="nowrap time-cell">{{ timestamp(run.get('created_at')) }}</td>
+  <td class="nowrap time-cell">{{ timestamp(run.get('submitted_at') if run.get('source_kind') == 'slurm' else run.get('created_at')) }}</td>
   <td class="mono runtime-cell" data-runtime data-start="{{ run.get('started_at') or '' }}" data-end="{{ run.get('ended_at') or '' }}" data-seconds="{{ run.get('runtime_seconds') if run.get('runtime_seconds') is not none else '' }}" data-state="{{ run.get('state', '') }}">{% if run.get('runtime_seconds') is not none %}{{ run.get('runtime_seconds') }}s{% else %}—{% endif %}</td>
 </tr>
 {%- endmacro %}

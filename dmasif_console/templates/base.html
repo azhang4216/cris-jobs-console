@@ -8,11 +8,19 @@
     <link rel="stylesheet" href="/static/console.css">
     <script src="/static/console.js" defer></script>
   </head>
-  <body data-page="{% block page %}history{% endblock %}" data-poll-seconds="{{ settings.get('poll_seconds', 8) }}" data-api-base-url="{{ settings.get('api_base_url', '') }}">
+  <body data-page="{% block page %}history{% endblock %}" data-mode="{{ settings.get('mode', '') }}" data-poll-seconds="{{ settings.get('poll_seconds', 15) }}" data-cluster-poll-seconds="{{ settings.get('cluster_poll_seconds', 30) }}" data-api-base-url="{{ settings.get('api_base_url', '') }}">
     <a class="skip-link" href="#main">Skip to content</a>
     <main id="main" class="main-shell">
       {% if settings.get('mode') in ['fake', 'demo', 'local'] %}
       <div class="demo-banner">Demo · simulated data</div>
+      {% endif %}
+      {% if settings.get('mode') == 'observe' %}
+      {% set observed = observation|default({}, true) %}
+      <div class="observation-status" role="status">
+        <span>Live cluster · read-only</span>
+        <span id="observation-time">{% if observed.get('observed_at') %}Last check <time datetime="{{ observed.get('observed_at') }}" data-time>{{ observed.get('observed_at') }}</time>{% else %}Waiting for the first cluster check{% endif %}</span>
+        <span id="observation-error" class="connection-stale" {% if not observed.get('error') %}hidden{% endif %}>{{ observed.get('error') or '' }}</span>
+      </div>
       {% endif %}
       {% block content %}{% endblock %}
     </main>

@@ -124,12 +124,16 @@ class ExperimentConfig(StrictModel):
 
 class Settings(StrictModel):
     state_dir: Path = Path(".state")
-    mode: Literal["fake", "ssh"] = "fake"
+    mode: Literal["fake", "ssh", "observe"] = "fake"
     repository: RepositoryConfig
     allowed_actor_ids: list[int] = Field(min_length=1)
     hook_id: str = "dmasif"
     operator_contact: str = "Ask your lab operator"
-    poll_seconds: int = Field(default=5, ge=1, le=300)
+    # Cluster checks are independent of cheap browser reads from the local DB.
+    poll_seconds: int = Field(default=30, ge=1, le=300)
+    dashboard_poll_seconds: int = Field(default=15, ge=3, le=300)
+    observation_job_prefix: str = Field(default="dmasif", min_length=1, max_length=100,
+                                        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
     submissions_enabled: bool = False
     # Legacy settings remain readable so existing deployments can upgrade.
     # They never gate viewing; retain the old password only for log redaction.
@@ -155,6 +159,11 @@ class Settings(StrictModel):
             raise ValueError("allowed actors must be positive numeric GitHub IDs")
         if set(self.presets) != {"quick-test"}:
             raise ValueError("v1 supports the quick-test preset only")
+        if self.mode == "observe":
+            if self.submissions_enabled:
+                raise ValueError("Observe mode is read-only; submissions_enabled must be false")
+            if not self.cluster.ssh_key_path or not self.cluster.known_hosts_path:
+                raise ValueError("Observe mode requires an SSH key and pinned known-hosts file")
         if self.mode == "ssh":
             if self.repository.clone_url != self.repository.url + ".git":
                 raise ValueError("SSH mode must fetch the configured GitHub repository over HTTPS")

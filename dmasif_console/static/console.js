@@ -7,12 +7,13 @@
     PREPARING: "Preparing", SUBMITTING: "Submitting", SUBMISSION_UNKNOWN: "Submission uncertain",
     QUEUED: "Queued on cluster", RUNNING: "Running", VALIDATING_RESULTS: "Checking results",
     SUCCEEDED: "Succeeded", PARTIAL: "Partial results", FAILED: "Failed", CANCELLED: "Cancelled",
-    TIMED_OUT: "Timed out", NEEDS_REVIEW: "Needs review",
+    TIMED_OUT: "Timed out", NEEDS_REVIEW: "Needs review", COMPLETED: "Completed",
   };
   const attentionStates = new Set(["SUBMISSION_UNKNOWN", "NEEDS_REVIEW", "PREPARATION_FAILED", "REJECTED", "PARTIAL", "FAILED", "TIMED_OUT"]);
   const page = document.body.dataset.page;
   const apiBase = (document.body.dataset.apiBaseUrl || "").replace(/\/$/, "");
-  const pollMilliseconds = Math.max(3000, Number(document.body.dataset.pollSeconds || 8) * 1000);
+  const pollMilliseconds = Math.max(3000, Number(document.body.dataset.pollSeconds || 15) * 1000);
+  const clusterPollMilliseconds = Math.max(1000, Number(document.body.dataset.clusterPollSeconds || 30) * 1000);
   const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   const dateFormatter = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
   const fullDateFormatter = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", timeZoneName: "short" });
@@ -154,11 +155,12 @@
     const link = runLink(run.id, "experiment-link", run.experiment || "Untitled experiment");
     link.title = `Run ${run.id || ""}`;
     identity.append(link);
-    const researcher = node("td", "", run.actor_login || "Unknown researcher");
+    if (run.source_kind === "slurm" && run.scheduler_job_id) identity.append(node("span", "cell-secondary", `Job ${run.scheduler_job_id}`));
+    const researcher = node("td", "", run.actor_login || (run.source_kind === "slurm" ? "—" : "Unknown researcher"));
     const commit = node("td"); commit.append(commitNode(run));
     const dataset = node("td"); dataset.append(node("span", "dataset-name", run.dataset_id || "—"));
     const state = node("td"); state.append(statusNode(run.state));
-    const received = node("td", "nowrap time-cell"); received.append(timeNode(run.created_at));
+    const received = node("td", "nowrap time-cell"); received.append(timeNode(run.source_kind === "slurm" ? run.submitted_at : run.created_at));
     const runtime = node("td", "mono runtime-cell"); runtime.dataset.runtime = ""; updateRuntime(runtime, run);
     row.append(identity, researcher, commit, dataset, state, received, runtime);
     return row;
@@ -210,6 +212,8 @@
   }
 
   function renderActivity(activity) {
+    const list = document.getElementById("activity-list");
+    if (!list) return;
     const fingerprint = JSON.stringify(activity);
     if (fingerprint === previousActivity) return;
     previousActivity = fingerprint;
@@ -224,7 +228,20 @@
       return item;
     });
     if (!items.length) items.push(node("li", "activity-empty", "No pushes yet."));
-    replacePreservingFocus(document.getElementById("activity-list"), items);
+    replacePreservingFocus(list, items);
+  }
+
+  function renderObservation(observation) {
+    const checked = document.getElementById("observation-time");
+    if (!checked) return;
+    const state = observation || {};
+    const observed = parseDate(state.observed_at);
+    const stale = observed && Date.now() - observed.getTime() > Math.max(120000, clusterPollMilliseconds * 3);
+    checked.replaceChildren(...(observed ? [document.createTextNode("Last check "), timeNode(state.observed_at)] : [document.createTextNode("Waiting for the first cluster check")]));
+    checked.classList.toggle("connection-stale", Boolean(stale));
+    const error = document.getElementById("observation-error");
+    error.textContent = state.error || (stale ? "Cluster updates delayed; showing saved data." : "");
+    error.hidden = !error.textContent;
   }
 
   function renderHistory(data) {
@@ -246,8 +263,8 @@
     renderActivity(Array.isArray(data.activity) ? data.activity : []);
   }
 
-  function renderArtifacts(artifacts) {
-    const fingerprint = JSON.stringify(artifacts);
+  function renderArtifacts(artifacts, source) {
+    const fingerprint = JSON.stringify([artifacts, source]);
     if (fingerprint === previousArtifacts) return;
     previousArtifacts = fingerprint;
     document.getElementById("artifact-count").textContent = String(artifacts.length);
@@ -273,7 +290,7 @@
     });
     if (!elements.length) {
       const empty = node("div", "results-empty");
-      empty.append(node("p", "", "No results yet."));
+      empty.append(node("p", "", source === "slurm" ? "Results have not been imported." : "No results yet."));
       elements.push(empty);
     }
     replacePreservingFocus(document.getElementById("artifacts-list"), elements);
@@ -309,12 +326,12 @@
     document.getElementById("events-list").replaceChildren(...elements);
   }
 
-  function renderLogs(text, observedAt) {
+  function renderLogs(text, observedAt, source) {
     const output = document.getElementById("log-output");
     const following = document.getElementById("follow-logs").checked;
     const scrollTop = output.scrollTop;
     const scrollLeft = output.scrollLeft;
-    const next = text || "Waiting for job output…";
+    const next = text || (source === "slurm" ? "Logs unavailable for this imported job." : "Waiting for job output…");
     if (output.textContent !== next) output.textContent = next;
     output.scrollTop = following ? output.scrollHeight : scrollTop;
     output.scrollLeft = scrollLeft;
@@ -342,14 +359,14 @@
     for (const key of ["validation", "config", "provenance"]) {
       document.getElementById(`${key}-json`).textContent = JSON.stringify(key === "provenance" ? publicProvenance(run[key]) : (run[key] || {}), null, 2);
     }
-    renderArtifacts(Array.isArray(run.artifacts) ? run.artifacts : []);
+    renderArtifacts(Array.isArray(run.artifacts) ? run.artifacts : [], run.source_kind);
     renderJobs(Array.isArray(data.jobs) ? data.jobs : []);
     renderEvents(Array.isArray(data.events) ? data.events : []);
-    if (typeof run.log_tail === "string") renderLogs(run.log_tail, run.last_observed_at);
+    if (typeof run.log_tail === "string") renderLogs(run.log_tail, run.last_observed_at, run.source_kind);
     // A functioning dashboard API is separate from a recent successful cluster check.
     const observed = parseDate(run.last_observed_at);
     const shouldBeObserved = ["QUEUED", "RUNNING", "SUBMITTING", "SUBMISSION_UNKNOWN", "VALIDATING_RESULTS"].includes(run.state);
-    const stale = shouldBeObserved && (!observed || Date.now() - observed.getTime() > Math.max(120000, pollMilliseconds * 4));
+    const stale = shouldBeObserved && (!observed || Date.now() - observed.getTime() > Math.max(120000, clusterPollMilliseconds * 3));
     document.getElementById("last-observed").classList.toggle("connection-stale", stale);
     if (stale) document.getElementById("last-observed").append(node("span", "cell-secondary", "Update delayed"));
   }
@@ -370,15 +387,18 @@
         const query = new URLSearchParams();
         const current = filters();
         for (const key of ["actor", "status", "experiment"]) if (current[key]) query.set(key, current[key]);
-        renderHistory(await getJSON(`/api/runs${query.size ? `?${query}` : ""}`));
+        const data = await getJSON(`/api/runs${query.size ? `?${query}` : ""}`);
+        renderHistory(data);
+        renderObservation(data.observation);
       }
       else if (page === "detail") {
         const id = document.getElementById("run-detail").dataset.runId;
         const data = await getJSON(`/api/runs/${encodeURIComponent(id)}`);
         renderDetail(data);
+        renderObservation(data.observation);
         if (typeof data.run?.log_tail !== "string") {
           const logs = await getJSON(`/api/runs/${encodeURIComponent(id)}/logs`);
-          renderLogs(logs.text, logs.last_observed_at);
+          renderLogs(logs.text, logs.last_observed_at, data.run.source_kind);
         }
       }
       connection.textContent = "Updates automatically";

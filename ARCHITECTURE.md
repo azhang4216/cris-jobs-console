@@ -1,7 +1,13 @@
 # dMaSIF job submission architecture
 
-Revision: R6, September 30, 2026. The read-only dashboard is public with no viewing login. Run branches use experiment names with automatic pusher attribution; hosting remains the selected single Render application. The R3 specialist review remains recorded below with its original scope.
-Scope: local architecture only. No service has been deployed and no cluster files or jobs have been changed for this design. Cluster paths below are proposed unless listed as observed.
+Revision: R7, September 30, 2026. Free live testing uses the laptop application and a temporary HTTPS tunnel. Render remains an optional deployment. A read-only SSH observer displays existing jobs without requiring the submission adapter. The R3 specialist review remains recorded below with its original scope.
+Scope: the live observer and one separately authorized manual extraction smoke test. The managed submission adapter/runtime has not been installed. Cluster paths below are proposed unless listed as observed; credentials and actual private test paths stay outside Git.
+
+## Current free live test
+
+Run FastAPI, SQLite, and a read-only Slurm observer on the laptop. A Cloudflare Quick Tunnel exposes the public website without paid hosting or a GitHub Pages frontend. The browser reads the local cache every 15 seconds; one shared observer polls SSH every 60 seconds, independently of viewer count. See [the live test guide](docs/live-test.md).
+
+Observation mode runs only bounded `squeue` and `sacct` queries. It rejects webhooks and submitting workers. Historical jobs retain unknown GitHub/code identities; scheduler completion is separate from validated scientific success. Existing logs/results are not associated with a job without evidence. This mode allows real visibility before enabling managed submissions.
 
 ## 1. Decision and first release
 
@@ -13,7 +19,7 @@ Keep the first release small:
 
 - One approved repository, four allowed GitHub identities, one extraction interface.
 - One demo dataset (`1STP`), one tested frozen runtime, one `quick-test` resource preset.
-- One Render web service running one web process and one worker, with SQLite and files on its persistent disk.
+- One application host running the web process and one worker, with SQLite and local files. Free live testing uses the laptop; Render is an optional deployment with a persistent disk.
 - Two screens: run history and run details.
 - One application job in flight; other accepted pushes wait in order.
 - Small validated downloads and automatically refreshing status/logs.
@@ -83,7 +89,7 @@ flowchart LR
     R["Researcher pushes run branch"] --> G["GitHub"]
     G -->|Signed webhook| W["Receiver + read-only dashboard"]
     B["Browser"] -->|HTTPS| W
-    subgraph Render["One Render application"]
+    subgraph Host["One application host (Render optional)"]
         W <--> D[("Persistent disk: SQLite + sources + results + backups")]
         D <--> P["One supervised worker"]
     end
@@ -94,7 +100,7 @@ flowchart LR
     P -->|Retrieve logs and results| F
 ```
 
-Deploy one paid Render web service outside the cluster: FastAPI, server-rendered HTML, modest JavaScript polling, and a Python worker inside one Docker container. The selected starting size is one CPU, 2 GB RAM, and a 10-GB persistent disk; review usage as retained source history grows. Render supplies HTTPS. There is no separate database service, background-worker service, proxy, or GitHub Pages frontend. The application needs outbound SSH and repository access, but no GPU or PyTorch. No persistent application service runs on the cluster login node.
+The managed submission design uses one application host outside the cluster: FastAPI, server-rendered HTML, modest JavaScript polling, and a Python worker. The current free test instead starts the web process and observer locally. For an optional paid Render deployment, the prepared Blueprint selects one CPU, 2 GB RAM, and a 10-GB persistent disk; review usage as retained source history grows. Render supplies HTTPS. There is no separate database service or GitHub Pages frontend. The application needs outbound SSH and repository access, but no GPU or PyTorch. No persistent application service runs on the cluster login node.
 
 `dmasif-console serve` supervises the web and worker processes, forwards termination, and exits on unexpected child failure so Render can restart the service. Health includes worker-process liveness; the dashboard separately reports stale cluster monitoring. Both processes use `/var/data/state`; local rotating backups use `/var/data/backups`. Keep exactly one instance. A deployment briefly interrupts the dashboard; submitted cluster jobs continue and monitoring reconciles after restart. The runtime disk is unavailable to Render one-off jobs and pre-deploy commands, so operator recovery uses the live service's Shell. [Render persistent disks](https://render.com/docs/disks)
 

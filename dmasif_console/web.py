@@ -31,11 +31,13 @@ STATUS_LABELS = {
     "QUEUED": "Queued on cluster", "RUNNING": "Running", "VALIDATING_RESULTS": "Checking results",
     "SUCCEEDED": "Succeeded", "PARTIAL": "Partial results", "FAILED": "Failed", "CANCELLED": "Cancelled",
     "TIMED_OUT": "Timed out", "NEEDS_REVIEW": "Needs review",
+    "COMPLETED": "Completed",
 }
 PUBLIC_RUN_FIELDS = {
     "id", "display_id", "actor_login", "actor_id", "experiment", "branch", "commit_sha", "commit_url",
     "dataset_id", "state", "reason", "created_at", "updated_at", "submitted_at", "started_at", "ended_at",
     "capacity_reserved", "log_tail", "monitor_error",
+    "scheduler_job_id",
 }
 PROVENANCE_FIELDS = {
     "source_commit", "source_sha256", "archive_sha256", "runtime_sha256", "checkpoint_sha256", "adapter_version",
@@ -82,11 +84,13 @@ def _redact(value, settings: Settings, run: dict | None = None):
 
 def public_run(run: dict, settings: Settings) -> dict:
     result = {k: run.get(k) for k in PUBLIC_RUN_FIELDS}
-    result["branch"] = run.get("branch") or run.get("ref", "").removeprefix("refs/heads/")
+    result["branch"] = run.get("branch") or (run.get("ref") or "").removeprefix("refs/heads/")
     config = run.get("config") or {}
     result["config"] = {k: config[k] for k in ("schema_version", "job_type", "dataset_id", "preset_id", "seed", "repeat_id") if k in config}
     result["dataset_id"] = run.get("dataset_id") or config.get("dataset_id")
-    result["commit_url"] = f"{settings.repository.url}/commit/{run['commit_sha']}"
+    sha = run.get("commit_sha")
+    result["commit_url"] = f"{settings.repository.url}/commit/{sha}" if sha else None
+    result["source_kind"] = "slurm" if run.get("source_kind") == "slurm" else "github"
     result["last_observed_at"] = run.get("last_observed_at") or run.get("last_checked_at")
     result["runtime_seconds"] = None
     if run.get("started_at") and (run.get("ended_at") or run.get("state") == "RUNNING"):
@@ -104,8 +108,9 @@ def public_run(run: dict, settings: Settings) -> dict:
     ]
     provenance = {**(run.get("provenance") or {}), **(raw_validation.get("provenance") or {})}
     result["provenance"] = {k: provenance[k] for k in PROVENANCE_FIELDS if k in provenance}
+    source = run.get("source") if isinstance(run.get("source"), dict) else {}
     result["provenance"].update(source_commit=run.get("commit_sha"),
-                                 source_sha256=(run.get("source") or {}).get("sha256") or provenance.get("source_sha256"),
+                                 source_sha256=source.get("sha256") or provenance.get("source_sha256"),
                                  commit_author=run.get("commit_author", {}), commit_committer=run.get("commit_committer", {}))
     if provenance.get("gpu"):
         result["provenance"]["gpu_name"] = provenance["gpu"]
@@ -121,7 +126,7 @@ def public_run(run: dict, settings: Settings) -> dict:
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or load_settings()
     maintenance = maintenance_enabled()
-    if len(settings.webhook_secret) < 16:
+    if settings.mode != "observe" and len(settings.webhook_secret) < 16:
         raise ValueError("Configure a webhook secret (16+ characters).")
     store = Store(settings.database_path)
     if not maintenance:
@@ -132,7 +137,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     templates = Jinja2Templates(directory=directory / "templates")
     app.mount("/static", StaticFiles(directory=directory / "static"), name="static")
     public_settings = {"mode": settings.mode, "operator_contact": settings.operator_contact,
-                       "poll_seconds": settings.poll_seconds, "repository_url": settings.repository.url,
+                       "poll_seconds": settings.dashboard_poll_seconds, "repository_url": settings.repository.url,
+                       "cluster_poll_seconds": settings.poll_seconds,
                        "instructions_url": "https://github.com/azhang4216/dmasif-console#researcher-workflow"}
 
     @app.middleware("http")
@@ -167,6 +173,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/webhooks/github")
     async def webhook(request: Request):
+        if settings.mode == "observe":
+            raise HTTPException(403, "This dashboard only observes existing cluster jobs; submissions are disabled.")
         if (settings.state_dir / "restore-pending.json").exists():
             raise HTTPException(503, "Restore reconciliation is pending; redeliver after the operator resumes service.")
         signature = request.headers.get("x-hub-signature-256", "")
@@ -253,14 +261,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                              "created_at": delivery["received_at"], "received_at": delivery["received_at"],
                              "actor_login": p.get("actor_login"), "branch": p.get("ref", "").removeprefix("refs/heads/")})
         control = store.control_state()
-        if not settings.submissions_enabled:
+        if settings.mode == "observe":
+            control = {"paused": False, "reason": ""}
+        elif not settings.submissions_enabled:
             control = {**control, "paused": True, "reason": "Submissions are disabled in operator configuration."}
         if (settings.state_dir / "restore-pending.json").exists():
             control = {**control, "paused": True, "reason": "Restore reconciliation requires operator review."}
         with store.connection() as con:
-            actors = [row[0] for row in con.execute("SELECT DISTINCT json_extract(data,'$.actor_login') AS actor FROM runs WHERE actor IS NOT NULL ORDER BY actor")]
+            actors = [row[0] for row in con.execute("SELECT DISTINCT json_extract(data,'$.actor_login') AS actor FROM runs WHERE actor IS NOT NULL AND actor != '' ORDER BY actor")]
         return {"runs": runs, "stats": store.stats(), "activity": _redact(activity, settings),
-                "actors": actors, "status_labels": STATUS_LABELS, "control": _redact(control, settings)}
+                "actors": actors, "status_labels": STATUS_LABELS, "control": _redact(control, settings),
+                "observation": observation_data()}
+
+    def observation_data():
+        if settings.mode != "observe":
+            return None
+        state = store.observation_state()
+        return _redact({k: state.get(k) for k in ("observed_at", "last_attempt_at", "error", "job_count")}, settings)
 
     def detail_data(run_id: str):
         run = store.get_run(run_id)
@@ -276,7 +293,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             events.append({"kind": event["kind"], "created_at": event["created_at"],
                            "reason": detail.get("reason", "") if isinstance(detail, dict) else str(detail)})
         return {"run": public_run(run, settings), "jobs": _redact(jobs, settings, run), "events": _redact(events, settings, run),
-                "status_labels": STATUS_LABELS}
+                "status_labels": STATUS_LABELS, "observation": observation_data()}
 
     @app.get("/")
     def history(request: Request, actor: str = Query(default="", max_length=100),

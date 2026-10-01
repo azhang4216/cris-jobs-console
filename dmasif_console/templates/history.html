@@ -24,7 +24,7 @@
   </form>
   <div class="table-scroll" tabindex="0" role="region" aria-label="Experiment runs">
     <table class="runs-table">
-      <thead><tr><th scope="col">Experiment</th><th scope="col">Researcher</th><th scope="col">Commit</th><th scope="col">Dataset</th><th scope="col">Status</th><th scope="col">Received</th><th scope="col">Runtime</th></tr></thead>
+      <thead><tr><th scope="col">Experiment</th><th scope="col">Researcher</th><th scope="col">Commit</th><th scope="col">Dataset</th><th scope="col">Status</th><th scope="col">{{ 'Submitted' if settings.get('mode') == 'observe' else 'Received' }}</th><th scope="col">Runtime</th></tr></thead>
       <tbody id="runs-body">{% for run in runs %}{{ run_row(run, status_labels) }}{% endfor %}</tbody>
     </table>
   </div>
@@ -35,6 +35,7 @@
   </div>
   <div class="table-footer"><span>Up to 200 matches · filter to find older runs</span></div>
 </section>
+{% if settings.get('mode') != 'observe' %}
 <details class="activity-disclosure">
   <summary>Push activity</summary>
   <ul class="activity-list" id="activity-list">
@@ -43,4 +44,5 @@
     {% else %}<li class="activity-empty">No pushes yet.</li>{% endfor %}
   </ul>
 </details>
+{% endif %}
 {% endblock %}

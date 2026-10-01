@@ -75,7 +75,7 @@ def supervise(commands: dict[str, list[str]], status_path: Path, *, env: dict[st
         _publish(status_path, children, ok=False)
         for name, command in commands.items():
             child_env = dict(env)
-            if name == "worker":
+            if name in {"worker", "observer"}:
                 for variable in ("DMASIF_WEBHOOK_SECRET", "DMASIF_WEBHOOK_SECRET_FILE",
                                  "DMASIF_VIEWER_PASSWORD", "DMASIF_VIEWER_PASSWORD_FILE"):
                     child_env.pop(variable, None)
@@ -113,7 +113,7 @@ def run_service(config_path: str | None, *, host: str = "0.0.0.0", port: int = 1
         raise ValueError("The HTTP port must be between 1 and 65535")
     path = Path(config_path or os.environ.get("DMASIF_CONFIG", "config/local.yaml")).resolve()
     settings = load_settings(path)
-    if len(settings.webhook_secret) < 16:
+    if settings.mode != "observe" and len(settings.webhook_secret) < 16:
         raise ValueError("Configure a webhook secret (16+ characters) before starting")
     settings.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     settings.state_dir.chmod(0o700)
@@ -128,7 +128,10 @@ def run_service(config_path: str | None, *, host: str = "0.0.0.0", port: int = 1
             base = [sys.executable, "-m", "dmasif_console.cli", "--config", str(path)]
             commands = {"web": [*base, "web", "--host", host, "--port", str(port)]}
             if not maintenance:
-                commands["worker"] = [*base, "worker"]
+                if settings.mode == "observe":
+                    commands["observer"] = [*base, "observe"]
+                else:
+                    commands["worker"] = [*base, "worker"]
             print("Starting console in maintenance mode." if maintenance else
                   "Starting console and one job monitor.", flush=True)
             return supervise(commands, status_path, env=env)

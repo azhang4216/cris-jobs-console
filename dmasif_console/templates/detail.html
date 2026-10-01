@@ -10,6 +10,7 @@
     <h1>{{ run.get('experiment') or 'Run details' }}</h1>
     <div id="detail-status">{{ status_badge(run.get('state', 'CHECKING_REQUEST'), status_labels) }}</div>
   </section>
+  {% if run.get('source_kind') == 'slurm' %}<p class="small-note imported-note">Imported from Slurm. Researcher, commit, and dataset are unavailable. Scheduler completion does not verify results.</p>{% endif %}
 
   <div class="run-notice" id="run-notice" {% if not needs_help and not run.get('monitor_error') %}hidden{% endif %}>
     <strong id="notice-label">{{ 'Needs attention' if needs_help else 'Monitoring issue' }}</strong>
@@ -18,8 +19,8 @@
     <span class="capacity-note" id="capacity-note" {% if not run.get('capacity_reserved') %}hidden{% endif %}>Job slot reserved.</span>
   </div>
 
-  <section class="timeline-strip" aria-label="Run timings">
-    <div><span>Received</span><strong data-timing="created_at">{{ timestamp(run.get('created_at')) }}</strong></div>
+  <section class="timeline-strip{% if run.get('source_kind') == 'slurm' %} observed-timings{% endif %}" aria-label="Run timings">
+    {% if run.get('source_kind') != 'slurm' %}<div><span>Received</span><strong data-timing="created_at">{{ timestamp(run.get('created_at')) }}</strong></div>{% endif %}
     <div><span>Submitted</span><strong data-timing="submitted_at">{{ timestamp(run.get('submitted_at')) }}</strong></div>
     <div><span>Started</span><strong data-timing="started_at">{{ timestamp(run.get('started_at')) }}</strong></div>
     <div><span>Ended</span><strong data-timing="ended_at">{{ timestamp(run.get('ended_at')) }}</strong></div>
@@ -41,7 +42,7 @@
             </div>
             {% if artifact.get('cached') and artifact.get('id') %}<a class="download-link" href="{{ settings.get('api_base_url', '') }}/artifacts/{{ artifact.get('id') }}">Download <span aria-hidden="true">↓</span></a>{% else %}<span class="download-unavailable">Download unavailable</span>{% endif %}
           </div>
-          {% else %}<div class="results-empty"><p>No results yet.</p></div>{% endfor %}
+          {% else %}<div class="results-empty"><p>{{ 'Results have not been imported.' if run.get('source_kind') == 'slurm' else 'No results yet.' }}</p></div>{% endfor %}
         </div>
         <details class="detail-disclosure"><summary>Validation</summary><pre class="json-block" id="validation-json">{{ run.get('validation', {})|tojson(indent=2) }}</pre></details>
       </section>
@@ -49,7 +50,7 @@
       <section class="panel logs-panel" aria-labelledby="logs-title">
         <div class="panel-heading"><h2 id="logs-title">Logs</h2><label class="follow-toggle"><input type="checkbox" id="follow-logs" checked> Follow output</label></div>
         <div class="log-toolbar"><span>stdout + stderr</span><span id="log-observed">Updated {{ timestamp(run.get('last_observed_at')) }}</span></div>
-        <pre class="log-output" id="log-output" tabindex="0" aria-label="Recent job log output">{{ run.get('log_tail') or 'Waiting for job output…' }}</pre>
+        <pre class="log-output" id="log-output" tabindex="0" aria-label="Recent job log output">{{ run.get('log_tail') or ('Logs unavailable for this imported job.' if run.get('source_kind') == 'slurm' else 'Waiting for job output…') }}</pre>
       </section>
 
       <details class="panel technical-details">
@@ -66,9 +67,10 @@
       <section class="panel">
         <div class="panel-heading"><h2>Run info</h2></div>
         <dl class="metadata-list">
-          <div><dt>Researcher</dt><dd>{{ run.get('actor_login') or 'Unknown' }}</dd></div>
+          <div><dt>Researcher</dt><dd>{{ run.get('actor_login') or '—' }}</dd></div>
           <div><dt>Commit</dt><dd>{{ commit_link(run) }}</dd></div>
-          <div><dt>Branch</dt><dd class="mono break-anywhere">{{ run.get('branch') or 'Unknown' }}</dd></div>
+          <div><dt>Branch</dt><dd class="mono break-anywhere">{{ run.get('branch') or '—' }}</dd></div>
+          {% if run.get('source_kind') == 'slurm' %}<div><dt>Slurm job</dt><dd class="mono">{{ run.get('scheduler_job_id') or '—' }}</dd></div>{% endif %}
           <div><dt>Dataset</dt><dd id="detail-dataset">{{ run.get('dataset_id') or '—' }}</dd></div>
           <div><dt>Last cluster check</dt><dd id="last-observed">{{ timestamp(run.get('last_observed_at')) }}</dd></div>
         </dl>

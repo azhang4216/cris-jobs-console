@@ -4,7 +4,8 @@ mode: ssh
 state_dir: /var/lib/dmasif-console
 submissions_enabled: false
 operator_contact: "Your lab operator: operator@example.org"
-poll_seconds: 10
+poll_seconds: 30
+dashboard_poll_seconds: 15
 repository:
   id: 123456789
   full_name: YOUR_LAB/dMaSIF

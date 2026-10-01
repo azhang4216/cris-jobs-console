@@ -4,6 +4,8 @@ A small GitHub-to-Slurm job service for a research lab. Researchers push experim
 
 The first release supports the existing dMaSIF **feature-extraction** interface. Full training and checkpoint resumption need a later adapter. The local demonstration uses synthetic inputs/features and never executes research code, SSH, or GPU jobs.
 
+**Current free test setup:** run the app locally with a real SSH connection and share its read-only dashboard through a temporary HTTPS tunnel. See [the live cluster guide](docs/live-test.md). Render remains an optional later deployment; GitHub Pages cannot run the backend.
+
 ## Researcher workflow
 
 **Start here: edit these files in the lab's dMaSIF research repository.** This `dmasif-console` repository contains the dashboard and submission service; the operator supplies the research repository URL.
@@ -102,18 +104,19 @@ The demo needs the development dependencies because it exercises the real ASGI r
 | Operator CLI | Pause/resume, reconcile/cancel, evidence-based resolution, consistent backup, restore with duplicate-delivery recovery |
 | Single-service hosting | Supervised web + worker, persistent SQLite/files, health checks, rotating local backups |
 | Local simulator | Persistent fake scheduler exercising the same run lifecycle without SSH or scientific execution |
+| Live observer | Read-only SSH monitoring of existing Slurm jobs, cached locally, with unknown Git provenance kept explicit |
 
 Every run writes beneath a new `runs/<run_uuid>/jobs/<slurm_job_id>/` directory. The generated template never uses the existing shared test-output directory. A persistent execution claim prevents the same run from executing twice; intentional repeats always get new run IDs.
 
 Scheduler exit zero is insufficient for success: every expected output must validate. Lost submission responses keep capacity reserved and trigger reconciliation, never an automatic second `sbatch`.
 
-## Deploy on Render
+## Optional deployment on Render
 
 Use **one paid Render web service with one persistent disk**. The service runs the website and job monitor together; SQLite stores history on the disk. Training/extraction stays on the lab's GPUs. There is no separate database, worker service, or GitHub Pages site.
 
 Start with [the Render setup guide](docs/render.md). [render.yaml](render.yaml) defines one 1-CPU/2-GB service and a 10-GB disk; review Render's displayed cost before creating it. Daily application backups retain three copies on that disk; an operator must also export backups elsewhere. Automatic infrastructure deployments are disabled, so experiment pushes do not restart the application.
 
-The service starts with real submissions disabled in operator configuration. Complete the approved repository/actor IDs, immutable input/image/checkpoint hashes, and private site settings from [config/example.yaml](config/example.yaml). Placeholder hashes deliberately fail validation. No cloud resources have been created and no cluster changes have been made.
+The submission service starts with real submissions disabled in operator configuration. Complete the approved repository/actor IDs, immutable input/image/checkpoint hashes, and private site settings from [config/example.yaml](config/example.yaml). Placeholder hashes deliberately fail validation. No Render service has been created; the current live preview uses the laptop and a temporary tunnel.
 
 The existing [Docker Compose guide](docs/deployment.md) remains an alternative for a lab-managed Linux server.
 
@@ -139,6 +142,6 @@ node --check dmasif_console/static/console.js
 
 Tests cover signed/replayed webhooks, identity spoofing, concurrent acceptance, secret redaction, source pinning, output collisions, corrupt/incomplete results, lost submission receipts, duplicate execution claims, cache recovery, and restore reconciliation. They use local temporary data and fake scheduler commands.
 
-The implementation has been exercised locally. Real Apptainer/Slurm execution, the chosen frozen runtime, site-specific mounts, and GPU performance still require an authorized cluster smoke test. No remote changes or GPU jobs were made during implementation.
+The observer has been connected to real Slurm history. A separate user-authorized manual extraction test uses an isolated source/input/output directory. The full GitHub-to-cluster submission path, frozen production runtime, and adapter installation still need their deployment checks; a manual test does not establish those.
 
 The design and review decisions are in [ARCHITECTURE.md](ARCHITECTURE.md).

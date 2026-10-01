@@ -21,7 +21,7 @@ def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(prog="dmasif-console")
     root.add_argument("--config", help="Operator YAML configuration (or DMASIF_CONFIG).")
     sub = root.add_subparsers(dest="command", required=True)
-    serve = sub.add_parser("serve", help="Run the website and one worker together (single Render service).")
+    serve = sub.add_parser("serve", help="Run the website and one job monitor together.")
     serve.add_argument("--host", default="0.0.0.0")
     serve.add_argument("--port", type=int, default=os.environ.get("PORT", "10000"))
     web = sub.add_parser("web", help="Serve the read-only dashboard and signed webhook receiver.")
@@ -29,6 +29,8 @@ def parser() -> argparse.ArgumentParser:
     web.add_argument("--port", type=int, default=8000)
     worker = sub.add_parser("worker", help="Run the single durable worker.")
     worker.add_argument("--once", action="store_true")
+    observe = sub.add_parser("observe", help="Read existing Slurm jobs over SSH; never submit or change cluster files.")
+    observe.add_argument("--once", action="store_true")
     for name in ("pause", "resume", "reconcile", "cancel", "resolve"):
         command = sub.add_parser(name)
         if name in {"reconcile", "cancel", "resolve"}:
@@ -170,6 +172,16 @@ def main(argv: list[str] | None = None):
                     worker.tick()
             else:
                 worker.run_forever()
+        elif args.command == "observe":
+            from .observer import Observer
+            observer = Observer(settings)
+            if args.once:
+                with observer:
+                    if not observer.tick():
+                        raise RuntimeError("Cluster observation failed; previous data has been preserved.")
+                print(f"Read-only cluster check complete: {observer.store.observation_state()['job_count']} jobs observed.")
+            else:
+                observer.run_forever()
         elif args.command in {"pause", "resume"}:
             store = Store(settings.database_path)
             store.initialize()

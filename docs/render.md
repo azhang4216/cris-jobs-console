@@ -1,6 +1,8 @@
 # Deploy one Render application
 
-The lab needs one Render web service and one persistent disk. The service hosts the website, watches the job queue, and keeps SQLite history and small downloadable results on the disk. The cluster still runs dMaSIF and retains large outputs.
+This is an optional paid deployment. The current free live test uses the laptop and a temporary tunnel; see [live-test.md](live-test.md).
+
+If deployed on Render, use one web service and one persistent disk. The service hosts the website, watches the job queue, and keeps SQLite history and small downloadable results on the disk. The cluster still runs dMaSIF and retains large outputs.
 
 Researchers only need the dashboard URL and their personal GitHub account. The website is public and needs no login. A push to `runs/<experiment>`, such as `runs/pocket-v1`, records the exact commit and creates a new run with its own output directory. The signed webhook supplies the pushing researcher's login and numeric ID automatically; branch names do not identify their owner. There is no website submission form or researcher account.
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
 import uuid
 from contextlib import closing, contextmanager
@@ -9,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-TERMINAL_STATES = {"REJECTED", "PREPARATION_FAILED", "SUCCEEDED", "PARTIAL", "FAILED", "CANCELLED", "TIMED_OUT"}
+TERMINAL_STATES = {"REJECTED", "PREPARATION_FAILED", "SUCCEEDED", "COMPLETED", "PARTIAL", "FAILED", "CANCELLED", "TIMED_OUT"}
 
 
 def utcnow() -> str:
@@ -95,7 +96,7 @@ class Store:
             data = dict(run_data or {})
             if run_id:
                 pending = con.execute("SELECT COUNT(*) FROM runs WHERE state NOT IN "
-                                      "('REJECTED','PREPARATION_FAILED','SUCCEEDED','PARTIAL','FAILED','CANCELLED','TIMED_OUT')"
+                                      "('REJECTED','PREPARATION_FAILED','SUCCEEDED','COMPLETED','PARTIAL','FAILED','CANCELLED','TIMED_OUT')"
                                       ).fetchone()[0]
                 if pending >= queue_limit:
                     data.update(state="REJECTED", reason="Application queue is full. Try a new push later.")
@@ -184,6 +185,76 @@ class Store:
             else:
                 con.execute("INSERT INTO scheduler_jobs(run_id,cluster,job_id,data) VALUES (?,?,?,?)",
                             (run_id, job["cluster"], job["job_id"], json.dumps(job)))
+
+    def upsert_observed_run(self, cluster: str, job: dict, observed_at: str) -> dict:
+        """Cache an existing allocation without inventing a submission or source.
+
+        Slurm can reuse job IDs. The original submission time identifies the
+        allocation incarnation and also namespaces the scheduler-job record.
+        """
+        identity = json.dumps([cluster, job["job_id"], job["submitted_at"]], separators=(",", ":"))
+        run_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "slurm-observation:" + identity))
+        cluster_key = "observed-" + hashlib.sha256(identity.encode()).hexdigest()
+        now = utcnow()
+        run = {
+            "id": run_id, "display_id": "slurm-" + job["job_id"], "source_kind": "slurm", "source": {},
+            "experiment": job["job_name"], "state": job["state"], "reason": job["reason"],
+            "actor_login": None, "actor_id": None, "commit_sha": None, "commit_url": None,
+            "branch": None, "dataset_id": None, "capacity_reserved": False,
+            "created_at": job["submitted_at"], "updated_at": now,
+            "submitted_at": job["submitted_at"], "started_at": job.get("started_at"),
+            "ended_at": job.get("ended_at"), "last_observed_at": observed_at,
+            "scheduler_job_id": job["job_id"], "scheduler_state": job["scheduler_state"], "log_tail": "", "artifacts": [],
+            "validation": {}, "provenance": {}, "config": {},
+        }
+        scheduler_job = {
+            "job_id": job["job_id"], "cluster": cluster_key, "state": job["scheduler_state"],
+            "exit_code": job.get("exit_code"), "submitted_at": job["submitted_at"],
+            "started_at": job.get("started_at"), "ended_at": job.get("ended_at"),
+            "observed_at": observed_at,
+        }
+        with self.connection(write=True) as con:
+            old = self._run(con.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone())
+            if old is not None and old.get("source_kind") != "slurm":
+                raise ValueError("observation identity conflicts with a submitted run")
+            con.execute(
+                "INSERT INTO runs(id,delivery_row_id,state,capacity_reserved,created_at,updated_at,data) "
+                "VALUES (?,NULL,?,0,?,?,?) ON CONFLICT(id) DO UPDATE SET "
+                "state=excluded.state,updated_at=excluded.updated_at,data=excluded.data",
+                (run_id, run["state"], run["created_at"], now, json.dumps(run)),
+            )
+            con.execute(
+                "INSERT INTO scheduler_jobs(run_id,cluster,job_id,data) VALUES (?,?,?,?) "
+                "ON CONFLICT(cluster,job_id) DO UPDATE SET data=excluded.data",
+                (run_id, cluster_key, job["job_id"], json.dumps(scheduler_job)),
+            )
+            if old is None or old["state"] != run["state"]:
+                self._event(con, run_id, "OBSERVED", {"reason": run["reason"]}, "observer")
+        return run
+
+    def record_observation(self, *, observed_at: str | None, error: str = "", job_count: int = 0) -> dict:
+        """Persist one current health record, keeping the last successful check."""
+        with self.connection(write=True) as con:
+            row = con.execute("SELECT id,detail FROM events WHERE kind='OBSERVATION' ORDER BY id DESC LIMIT 1").fetchone()
+            previous = json.loads(row["detail"]) if row else {}
+            state = {
+                "observed_at": observed_at or previous.get("observed_at"),
+                "last_attempt_at": utcnow(), "error": error,
+                "job_count": job_count if observed_at else previous.get("job_count", 0),
+            }
+            if row:
+                con.execute("UPDATE events SET created_at=?,detail=? WHERE id=?",
+                            (state["last_attempt_at"], json.dumps(state), row["id"]))
+            else:
+                self._event(con, None, "OBSERVATION", state, "observer")
+            return state
+
+    def observation_state(self) -> dict:
+        with self.connection() as con:
+            row = con.execute("SELECT detail FROM events WHERE kind='OBSERVATION' ORDER BY id DESC LIMIT 1").fetchone()
+            return json.loads(row[0]) if row else {
+                "observed_at": None, "last_attempt_at": None, "error": "", "job_count": 0,
+            }
 
     def jobs(self, run_id: str) -> list[dict]:
         with self.connection() as con:

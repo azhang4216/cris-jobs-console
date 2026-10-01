@@ -1,0 +1,23 @@
+# Copy to ignored config/local.observe.yaml; fill in private SSH values there.
+# This mode only reads existing jobs. GitHub submissions are always disabled.
+mode: observe
+state_dir: .state-cluster-live
+submissions_enabled: false
+poll_seconds: 60
+dashboard_poll_seconds: 15
+observation_job_prefix: extract
+operator_contact: "Your lab operator"
+
+# Retained schema fields; observe mode does not fetch this repository or accept pushes.
+repository:
+  id: 123456789
+  full_name: YOUR_LAB/dMaSIF
+  clone_url: https://github.com/YOUR_LAB/dMaSIF.git
+allowed_actor_ids: [11111]
+
+cluster:
+  host: login.example.invalid
+  user: researcher
+  root: /work/lab/project
+  ssh_key_path: /absolute/private/path/cluster-key
+  known_hosts_path: /absolute/private/path/known_hosts

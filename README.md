@@ -4,6 +4,67 @@ A small GitHub-to-Slurm job service for a research lab. Researchers push experim
 
 The first release supports the existing dMaSIF **feature-extraction** interface. Full training and checkpoint resumption need a later adapter. The local demonstration uses synthetic inputs/features and never executes research code, SSH, or GPU jobs.
 
+## Researcher workflow
+
+**Start here: edit these files in the lab's dMaSIF research repository.** This `dmasif-console` repository contains the dashboard and submission service; the operator supplies the research repository URL.
+
+### What do I change?
+
+| I want to… | File to edit in the research repository | What to change |
+| --- | --- | --- |
+| Choose the data, seed, or repeat an experiment | **`experiments/run.yaml`** | `dataset_id`, `seed`, and `repeat_id` |
+| Change the Python computation | **`affinity/extract.py`** | The extraction logic, or project modules it imports |
+| Add my own Python helper | **`affinity/my_experiment.py`** (your chosen filename) **and `affinity/extract.py`** | Add your code, then import and call it from the extractor |
+
+**For a run with different settings, you only need to edit `experiments/run.yaml`.** The existing Python code can stay as it is.
+
+### 1. Set up your run
+
+Create `experiments/run.yaml` in the research repository using the example below. [Downloadable template](config/run.example.yaml).
+
+```yaml
+# EDIT THESE for your experiment:
+dataset_id: demo-1stp-v1  # Use a dataset ID supplied by the operator.
+seed: 0                 # Choose an integer seed.
+repeat_id: first-run    # Use a new label when repeating a run.
+
+# KEEP THESE as shown for the current feature-extraction runner:
+schema_version: 1
+job_type: dmasif_extract
+preset_id: quick-test
+```
+
+`demo-1stp-v1` is an example; the operator must register the dataset before it can run. Saving changes to this console's `config/run.example.yaml` does not submit an experiment—the request file is **`experiments/run.yaml` in the research repository**.
+
+### 2. Change the code, if needed
+
+The runner executes **`affinity/extract.py` from your submitted commit**. Edit that file or the project modules it uses, such as `model.py`. Commit every changed or newly added helper file alongside it.
+
+A new file such as `affinity/my_experiment.py` runs only when the extractor imports and calls it. There is no `script:` or `command:` option in `run.yaml`. This release supports the existing feature-extraction interface; a standalone training script needs an adapter update.
+
+**Keep the extractor's input/output arguments working, and write results to the supplied `--out` directory.** The service gives every run its own output directory. Keep the existing NPZ result format so the dashboard can validate and download results. New packages or incompatible checkpoint/model changes need a runtime or adapter update with the operator. [Code interface details](docs/researcher.md#changing-python-code).
+
+### 3. Commit and push to submit
+
+From the **research repository** checkout, after making your edits:
+
+```bash
+git switch -c runs/pocket-v1
+# Include any other Python files you changed or added in this command:
+git add experiments/run.yaml affinity/extract.py
+git diff --cached
+git commit -m "Run pocket-v1 feature extraction"
+git push -u origin HEAD
+```
+
+Replace `pocket-v1` with your experiment name. If you added `affinity/my_experiment.py`, for example, include that path in `git add` too. Your username is recorded automatically from GitHub.
+
+**The push submits the job.** A local save or commit alone does not. Each qualifying push to `runs/<experiment>` runs its final commit; ordinary development branches do not submit jobs. Repeat on an existing run branch by changing `repeat_id`, committing, and pushing again. Every run keeps separate outputs.
+
+Open the dashboard and select your run for logs and downloads. The local demo uses simulated pushes; real submissions require the operator to connect the research repository and enable jobs.
+
+See [the researcher guide](docs/researcher.md) for configuration limits, results, and troubleshooting.
+
 ## Run the local demo
 
 Requires Python 3.12+ and Git. From this directory:
@@ -26,30 +87,6 @@ dmasif-console --config .state-demo/config.yaml serve --host 127.0.0.1 --port 80
 ```
 
 The demo needs the development dependencies because it exercises the real ASGI receiver using a local test client. Deployed web/worker services need only `requirements.lock`.
-
-## Researcher workflow
-
-In the **research repository**, copy [config/run.example.yaml](config/run.example.yaml) to `experiments/run.yaml`, commit the desired code, and push a branch named `runs/experiment-name`, for example `runs/pocket-v1`. Your username is not required in the branch name.
-
-From your research checkout, after saving the run configuration:
-
-```bash
-git switch -c runs/pocket-v1
-git add experiments/run.yaml affinity/extract.py
-git commit -m "Run pocket-v1 feature extraction"
-git push -u origin HEAD
-```
-
-Open the dashboard to track the run, then select it for logs and downloads. The dashboard's **How to run an experiment** link returns to this section. The local demo uses simulated pushes; real submissions require the operator to configure the research repository and enable jobs.
-
-- Each qualifying push creates one run for the final full commit SHA.
-- The signed GitHub webhook identifies the researcher who pushed by account login and numeric ID; commit authorship is recorded separately.
-- A repeated webhook returns the existing run. A new configuration commit changing `repeat_id` creates a separate run.
-- All job outcomes appear on the dashboard, including rejected configuration and missing outputs.
-
-Branch names are shared within the repository. Use different experiment names for independent work; any approved researcher can push to a shared run branch, and each qualifying push gets its own run and outputs.
-
-See [the researcher guide](docs/researcher.md) for the first-run steps and recovery help.
 
 ## What is implemented
 

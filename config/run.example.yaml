@@ -1,7 +1,16 @@
-# Commit this as experiments/run.yaml in the research repository.
+# COPY TEMPLATE: save as experiments/run.yaml in the dMaSIF research repository.
+# This template in the console repository is not an executable job request.
+# Change the computation in affinity/extract.py or the modules it imports.
+
+# EDIT THESE for your experiment:
+dataset_id: demo-1stp-v1  # Use a dataset ID supplied by the operator.
+seed: 0                 # Integer from 0 to 4294967295.
+repeat_id: first-run    # New label for a repeat; letters, numbers, _, ., or -.
+
+# KEEP THESE as shown for the current feature-extraction runner:
 schema_version: 1
 job_type: dmasif_extract
-dataset_id: demo-1stp-v1
 preset_id: quick-test
-seed: 0
-repeat_id: first-run
+
+# Commit this file and any code changes, then push runs/<experiment> to submit.
+# Output paths are assigned automatically; the extractor must respect --out.

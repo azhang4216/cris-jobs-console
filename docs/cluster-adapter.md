@@ -53,7 +53,7 @@ Enable the one-input `demo-1stp-v1` preset, submit from one designated run branc
 - The pinned commit and recorded module paths match the saved source.
 - The allocated GPU sees the tested runtime; the checkpoint loads successfully.
 - One expected input produces one valid NPZ with nonempty points and 16-dimensional features.
-- Dashboard timings, live logs, validation report, and authenticated download work.
+- Dashboard timings, live logs, validation report, and public download work.
 - A second config commit repeating the experiment writes to a different UUID/job directory.
 - A webhook redelivery links to the original run and does not submit again.
 

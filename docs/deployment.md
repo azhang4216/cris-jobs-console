@@ -10,9 +10,9 @@ These are deployment instructions, not a record of deployment. Building or readi
 
 GitHub Pages hosts static HTML, CSS, and JavaScript. It cannot run this Python webhook receiver, durable worker, SQLite database, or SSH client. The simplest setup serves the website and backend together at one HTTPS address. [GitHub Pages documentation](https://docs.github.com/en/pages/getting-started-with-github-pages/what-is-github-pages)
 
-A Pages frontend would still need this server, plus a separate static frontend, cross-origin API authentication, and CORS configuration. That split deployment is not included in v1. It would not remove the server or simplify the four-person workflow.
+A Pages frontend would still need this server, plus a separate static frontend and CORS configuration for its public API requests. That split deployment is not included in v1. It would not remove the server or simplify the four-person workflow.
 
-GitHub Actions secrets exist inside authorized workflow jobs. They do not automatically become secrets on the application host. Never embed the SSH key, webhook secret, repository token, or viewer password into a Pages bundle, browser JavaScript, or research workflow. Researchers only need the website URL, shared viewer credentials, and their personal GitHub account.
+GitHub Actions secrets exist inside authorized workflow jobs. They do not automatically become secrets on the application host. Never embed the SSH key, webhook secret, or repository token into a Pages bundle, browser JavaScript, or research workflow. Researchers only need the website URL and their personal GitHub account. Dashboard pages, run APIs, logs, and result downloads are public; a private GitHub repository protects its source, not the website.
 
 ## Files and responsibilities
 
@@ -35,7 +35,7 @@ The operator supplies:
 - An always-on Linux host, current Docker Engine and Compose, and outbound HTTPS/SSH access.
 - A DNS name pointing to that host and inbound TCP ports 80/443. Do not publish port 8000.
 - The approved GitHub repository's numeric ID, exact name/URL, four allowed numeric actor IDs, and a repository webhook.
-- A named operator contact, a random shared viewer password, and a separate random webhook secret.
+- A named operator contact and a random webhook secret.
 - The approved unattended SSH credential and an independently verified `known_hosts` entry.
 - The installed fixed cluster adapter, approved scheduler account/preset, and immutable demo input manifest.
 - A tested frozen Apptainer image and checkpoint, each with its verified SHA-256 checksum.
@@ -60,9 +60,9 @@ chmod 600 deploy/.env deploy/private/operator.yaml
 
 Edit `deploy/.env` with the public domain and operator email. Its file locations are relative to `deploy/`, the first Compose file's directory. It contains locations, not credential contents. Pin tested Python/Caddy image digests for the actual release if reproducible image selection is required; the defaults are version-family tags.
 
-Edit `deploy/private/operator.yaml` with the approved site values. Leave `submissions_enabled: false`. Set `mode: ssh` only when its runtime/checkpoint hashes and operator contact are complete. The container overrides `state_dir` to `/var/lib/dmasif-console`; do not map it to NFS. Do not put the viewer password, webhook secret, SSH key, or repository token in YAML.
+Edit `deploy/private/operator.yaml` with the approved site values. Leave `submissions_enabled: false`. Set `mode: ssh` only when its runtime/checkpoint hashes and operator contact are complete. The container overrides `state_dir` to `/var/lib/dmasif-console`; do not map it to NFS. Do not put the webhook secret, SSH key, or repository token in YAML.
 
-Generate distinct local secrets without printing them:
+Generate the webhook secret without printing it:
 
 ```bash
 python3 - <<'PY'
@@ -70,11 +70,10 @@ import os
 from pathlib import Path
 import secrets
 
-for name in ("webhook-secret", "viewer-password"):
-    path = Path("deploy/private") / name
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(descriptor, "w") as stream:
-        stream.write(secrets.token_urlsafe(40) + "\n")
+path = Path("deploy/private/webhook-secret")
+descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(descriptor, "w") as stream:
+    stream.write(secrets.token_urlsafe(40) + "\n")
 PY
 ```
 
@@ -84,17 +83,17 @@ The containers run as UID/GID **10001:10001**. On a standard rootful Linux Docke
 
 ```bash
 sudo chown 10001:10001 deploy/private/operator.yaml \
-  deploy/private/webhook-secret deploy/private/viewer-password \
+  deploy/private/webhook-secret \
   deploy/private/cluster-key deploy/private/known-hosts deploy/backups
 sudo chmod 600 deploy/private/operator.yaml \
-  deploy/private/webhook-secret deploy/private/viewer-password \
+  deploy/private/webhook-secret \
   deploy/private/cluster-key deploy/private/known-hosts
 sudo chmod 700 deploy/backups
 ```
 
 Use an operator editor with appropriate permissions for later edits. Do not make the private key world-readable to fix a permissions error. Rootless/user-namespace Docker needs the corresponding host UID mapping instead of assuming 10001 maps directly.
 
-Compose mounts secrets as files and grants them per service. With local file-backed secrets, `uid`/`gid`/`mode` remapping is not implemented; preserve the correct host ownership/mode. The web container mounts only operator configuration and web secrets. The worker mounts operator configuration, the SSH key, and known hosts. Neither Caddy nor the web container receives the SSH key. [Compose secrets](https://docs.docker.com/compose/how-tos/use-secrets/), [service secret options](https://docs.docker.com/reference/compose-file/services/#secrets)
+Compose mounts secrets as files and grants them per service. With local file-backed secrets, `uid`/`gid`/`mode` remapping is not implemented; preserve the correct host ownership/mode. The web container mounts only operator configuration and the webhook secret. The worker mounts operator configuration, the SSH key, and known hosts. Neither Caddy nor the web container receives the SSH key. [Compose secrets](https://docs.docker.com/compose/how-tos/use-secrets/), [service secret options](https://docs.docker.com/reference/compose-file/services/#secrets)
 
 ## Private research repositories
 
@@ -128,7 +127,7 @@ dc ps
 
 The initial named state volume gets UID 10001 ownership from the image. Both application services require writes for SQLite WAL; never mount that volume read-only or share it across application hosts. Do not scale the worker. Its process-lifetime file lock rejects a second worker against the same state volume.
 
-Open the HTTPS address and sign in using the configured `viewer_username` and shared viewer password. This gate protects browsing; the personal GitHub actor identifies each submitter. Web/API requests read local saved state and never perform SSH.
+Open the HTTPS address without signing in. The public dashboard is read-only; signed GitHub pushes and the approved numeric sender IDs identify and authorize submitters. Web/API requests read local saved state and never perform SSH.
 
 Configure a repository webhook with:
 
@@ -137,7 +136,7 @@ Configure a repository webhook with:
 - Secret: the exact contents of the separate webhook-secret file.
 - Events: pushes only; SSL verification enabled.
 
-Keep the secret out of chat, command history, and the repository. The receiver validates the raw-body HMAC and actor/repository policy. Do not protect this endpoint with the shared viewer password; GitHub uses its own signature. [GitHub signature validation](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries)
+Keep the secret out of chat, command history, and the repository. The receiver validates the raw-body HMAC and actor/repository policy. Public viewing does not bypass these submission checks. [GitHub signature validation](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries)
 
 Check the delivery response in GitHub and the received-event activity on the dashboard. Initially do not push a run branch unless a queued test run is intended. Jobs remain paused until both the policy and stored pause state allow submissions.
 

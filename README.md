@@ -1,6 +1,6 @@
 # dMaSIF research console
 
-A small GitHub-to-Slurm job service for a research lab. Researchers push experiment branches; a private, read-only dashboard shows who submitted each run, its exact code and configuration, progress, logs, and validated results. The backend holds the cluster credential. Researchers do not need cluster logins or individual website accounts.
+A small GitHub-to-Slurm job service for a research lab. Researchers push experiment branches; a public, read-only dashboard shows who submitted each run, its exact code and configuration, progress, logs, and validated results. The backend holds the cluster credential. Researchers do not need cluster logins or website accounts.
 
 The first release supports the existing dMaSIF **feature-extraction** interface. Full training and checkpoint resumption need a later adapter. The local demonstration uses synthetic inputs/features and never executes research code, SSH, or GPU jobs.
 
@@ -16,16 +16,13 @@ python -m pip install --no-deps -e .
 dmasif-console demo --serve
 ```
 
-Open **http://127.0.0.1:8000**. The command prints the local demo's shared viewer username/password. Two signed sample pushes move through the queue and produce separate downloadable NPZ files. The page clearly labels the data as simulated. Stop with Ctrl+C.
+Open **http://127.0.0.1:8000**; no login is required. Two signed sample pushes move through the queue and produce separate downloadable NPZ files. The page clearly labels the data as simulated. Stop with Ctrl+C.
 
-Demo state and generated secrets live in ignored `.state-demo/`. The command refuses to overwrite an existing demo; use a new `--state-dir .state-demo-2`, or reuse the existing one in two terminals:
+Demo state and the generated webhook secret live in ignored `.state-demo/`. The command refuses to overwrite an existing demo; use a new `--state-dir .state-demo-2`, or restart the existing one:
 
 ```bash
 export DMASIF_WEBHOOK_SECRET_FILE="$PWD/.state-demo/webhook-secret"
-export DMASIF_VIEWER_PASSWORD_FILE="$PWD/.state-demo/viewer-password"
-dmasif-console --config .state-demo/config.yaml worker
-# In a second terminal, activate the same environment and set the same variables:
-dmasif-console --config .state-demo/config.yaml web
+dmasif-console --config .state-demo/config.yaml serve --host 127.0.0.1 --port 8000
 ```
 
 The demo needs the development dependencies because it exercises the real ASGI receiver using a local test client. Deployed web/worker services need only `requirements.lock`.
@@ -76,7 +73,8 @@ The existing [Docker Compose guide](docs/deployment.md) remains an alternative f
 
 - Real SSH keys, login notes, `.env` files, deployment secrets, and application state are ignored by Git. Private original notes remain in ignored `.local/` on this workstation.
 - Publishable code/docs use example cluster identities. Site-specific login details belong only in ignored operator configuration, mounted as a runtime secret.
-- Render stores the SSH key, verified `known_hosts`, and private operator configuration as secret files. Webhook/viewer secrets are entered in Render, never in `render.yaml`.
+- Render stores the SSH key, verified `known_hosts`, and private operator configuration as secret files. The webhook secret is entered in Render, never in `render.yaml`.
+- Dashboard pages, run APIs, logs, and result downloads are public and require no login. A private GitHub repository protects its source; it does not make the dashboard private. Only signed pushes from approved GitHub IDs can create runs; visitors cannot submit or cancel jobs.
 - The single Render service is one backend trust boundary: its administrator and backend processes can access its credentials. Browser clients cannot. The optional Compose setup provides separate web/worker secret mounts.
 - Docker build contexts use an allowlist. Browser responses omit private policies/paths and redact current and historical cluster login identities from logs and errors.
 - An optional private-repository token belongs in a backend secret file. GitHub Actions secrets are not automatically runtime secrets; never put cluster credentials into a Pages bundle or experiment workflow.

@@ -2,15 +2,15 @@
 
 The lab needs one Render web service and one persistent disk. The service hosts the website, watches the job queue, and keeps SQLite history and small downloadable results on the disk. The cluster still runs dMaSIF and retains large outputs.
 
-Researchers only need the website's shared viewing password and their personal GitHub account. A push to `runs/<experiment>`, such as `runs/pocket-v1`, records the exact commit and creates a new run with its own output directory. The signed webhook supplies the pushing researcher's login and numeric ID automatically; branch names do not identify their owner. There is no website submission form or separate researcher account.
+Researchers only need the dashboard URL and their personal GitHub account. The website is public and needs no login. A push to `runs/<experiment>`, such as `runs/pocket-v1`, records the exact commit and creates a new run with its own output directory. The signed webhook supplies the pushing researcher's login and numeric ID automatically; branch names do not identify their owner. There is no website submission form or researcher account.
 
 ## Set up once
 
 1. **Connect the infrastructure repository**, `azhang4216/dmasif-console`, to Render. Keep its `main` branch protected and separate from the dMaSIF research repository. Before publishing any changes, check Git's file list; private configuration, keys, notes, and state must stay ignored.
 2. **Prepare the private operator configuration.** Copy [config/example.yaml](../config/example.yaml) to ignored `deploy/private/operator.yaml`. Fill in the approved research repository and numeric researcher IDs, cluster settings, operator contact, dataset checksums, and tested runtime/checkpoint hashes. Keep `submissions_enabled: false`. The fixed cluster adapter and runtime must be installed and tested before enabling jobs; see [cluster setup](cluster-adapter.md). These instructions do not install anything remotely.
-3. **Create a Render Blueprint** from the infrastructure repository. [render.yaml](../render.yaml) requests a paid `1c-2g` web service in Virginia, one instance, and a 10-GB disk. Review the displayed recurring charge before creating resources. Supply two different, long random values when Render prompts for `DMASIF_WEBHOOK_SECRET` and `DMASIF_VIEWER_PASSWORD`.
+3. **Create a Render Blueprint** from the infrastructure repository. [render.yaml](../render.yaml) requests a paid `1c-2g` web service in Virginia, one instance, and a 10-GB disk. Review the displayed recurring charge before creating resources. Supply a long random value when Render prompts for `DMASIF_WEBHOOK_SECRET`.
 4. **Add the three private files** below under the service's **Environment → Secret Files**. Do not paste them into GitHub, the Blueprint, application logs, or chat. The first deploy can fail while these files are missing; after saving all three, deploy the service again.
-5. **Open the Render HTTPS URL** and use the viewer username from operator configuration (default `lab`) and the shared password. Configure the research repository's push webhook using the table below. Keep submissions disabled until the authorized cluster smoke test is ready.
+5. **Open the Render HTTPS URL**; no login is required. Configure the research repository's push webhook using the table below. Keep submissions disabled until the authorized cluster smoke test is ready.
 
 | Render secret filename | Contents | Application location |
 | --- | --- | --- |
@@ -68,7 +68,9 @@ The fixed credential helper reads the file for Git authentication. Do not put th
 
 ## Secrets and access
 
-The browser never receives the SSH key, private operator configuration, or repository token. Viewer pages require the shared password; webhook requests require a GitHub signature. Render administrators and the backend can access the service's secrets, so only trusted operators should administer it. The web and worker share one service and operating-system user; this design does not isolate the key from a compromised web process.
+Dashboard pages, run APIs, logs, and result downloads are public. Keeping either GitHub repository private protects that repository's source, not the website. A commit link still requires repository access to view the code on GitHub. Visitors cannot submit, cancel, or retry runs; the receiver requires a valid GitHub signature and an approved repository and numeric sender ID.
+
+The browser never receives the SSH key, private operator configuration, or repository token. Render administrators and the backend can access the service's secrets, so only trusted operators should administer it. The web and worker share one service and operating-system user; this design does not isolate the key from a compromised web process.
 
 Render makes [secret files](https://render.com/docs/configure-environment-variables#secret-files) available under `/etc/secrets`. It also places copies in the Docker build context. The Dockerfile-specific allowlist excludes them, and Dockerfile instructions never reference credential build arguments. Preserve these rules when editing the image; never replace explicit `COPY` instructions with an unrestricted `COPY . .`. See [Render's Docker secret handling](https://render.com/docs/docker).
 

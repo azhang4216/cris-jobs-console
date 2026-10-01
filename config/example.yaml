@@ -11,8 +11,8 @@ repository:
   clone_url: https://github.com/YOUR_LAB/dMaSIF.git
 allowed_actor_ids: [11111, 22222, 33333, 44444]
 hook_id: dmasif-lab-push
-viewer_username: lab
-# Passwords use DMASIF_VIEWER_PASSWORD_FILE and DMASIF_WEBHOOK_SECRET_FILE.
+# Public read-only viewing needs no password. Supply the webhook secret through
+# DMASIF_WEBHOOK_SECRET or DMASIF_WEBHOOK_SECRET_FILE, never in this config.
 datasets:
   demo-1stp-v1:
     description: "Registered 1STP extraction smoke test"

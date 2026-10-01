@@ -11,14 +11,14 @@ import pytest
 
 from dmasif_console.config import Settings
 from dmasif_console.db import Store
-from dmasif_console.supervisor import maintenance_enabled, supervise, supervisor_healthy
+from dmasif_console.supervisor import maintenance_enabled, run_service, supervise, supervisor_healthy
 from dmasif_console.web import create_app
 
 
 def settings(tmp_path):
     return Settings(state_dir=tmp_path / "state", repository={"id": 1, "full_name": "lab/research",
                     "clone_url": str(tmp_path)}, allowed_actor_ids=[1],
-                    webhook_secret="synthetic-webhook-secret", viewer_password="synthetic-viewer-password")
+                    webhook_secret="synthetic-webhook-secret")
 
 
 @pytest.mark.parametrize("failed", ["web", "worker"])
@@ -89,7 +89,7 @@ def test_maintenance_blocks_webhooks_and_database_routes_but_allows_health(tmp_p
         config.database_path.unlink()  # A restore can move/replace the DB now.
         assert client.get("/healthz").json() == {"status": "maintenance"}
         for path in ("/", "/api/runs", "/artifacts/anything"):
-            response = client.get(path, auth=(config.viewer_username, config.viewer_password))
+            response = client.get(path)
             assert response.status_code == 503
             assert response.headers["Retry-After"] == "60"
         assert client.post("/webhooks/github", json={}).status_code == 503
@@ -116,3 +116,40 @@ def test_serve_uses_render_port(monkeypatch):
     from dmasif_console.cli import parser
     monkeypatch.setenv("PORT", "12345")
     assert parser().parse_args(["serve"]).port == 12345
+
+
+@pytest.mark.parametrize("maintenance", ["0", "1"])
+def test_serve_starts_without_viewer_credentials(tmp_path, monkeypatch, maintenance):
+    config = settings(tmp_path)
+    assert config.viewer_password == ""
+    monkeypatch.setenv("DMASIF_MAINTENANCE", maintenance)
+    monkeypatch.setattr("dmasif_console.supervisor.load_settings", lambda _: config)
+    observed = {}
+
+    def capture(commands, status_path, *, env):
+        observed.update(commands)
+        assert status_path.parent.is_dir()
+        return 0
+
+    monkeypatch.setattr("dmasif_console.supervisor.supervise", capture)
+    previous_umask = os.umask(0o077)
+    try:
+        assert run_service(str(tmp_path / "config.yaml")) == 0
+    finally:
+        os.umask(previous_umask)
+    assert set(observed) == ({"web"} if maintenance == "1" else {"web", "worker"})
+
+
+@pytest.mark.parametrize("secret", ["", "too-short"])
+def test_serve_requires_webhook_secret_before_starting_children(tmp_path, monkeypatch, secret):
+    config = settings(tmp_path)
+    config.webhook_secret = secret
+    monkeypatch.setattr("dmasif_console.supervisor.load_settings", lambda _: config)
+    monkeypatch.setattr("dmasif_console.supervisor.supervise", lambda *a, **k: pytest.fail("children started"))
+    previous_umask = os.umask(0o077)
+    try:
+        with pytest.raises(ValueError, match="webhook secret"):
+            run_service(str(tmp_path / "config.yaml"))
+    finally:
+        os.umask(previous_umask)
+    assert not config.state_dir.exists()

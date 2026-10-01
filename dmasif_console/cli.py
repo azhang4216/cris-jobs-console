@@ -138,17 +138,17 @@ def main(argv: list[str] | None = None):
     try:
         if args.command == "demo":
             from .demo import prepare_demo
-            config_path, password = prepare_demo(args.state_dir)
+            config_path = prepare_demo(args.state_dir)
             os.environ["DMASIF_WEBHOOK_SECRET_FILE"] = str(config_path.parent / "webhook-secret")
-            os.environ["DMASIF_VIEWER_PASSWORD_FILE"] = str(config_path.parent / "viewer-password")
             os.environ.pop("DMASIF_WEBHOOK_SECRET", None)
             os.environ.pop("DMASIF_VIEWER_PASSWORD", None)
+            os.environ.pop("DMASIF_VIEWER_PASSWORD_FILE", None)
             settings = load_settings(config_path)
             print(f"Local fake demo created: {config_path}")
             print("Synthetic data only; no dMaSIF code, SSH, or GPUs are executed.")
-            print(f"Viewer username: lab\nViewer password: {password}")
+            print("The dashboard is public and read-only; no viewing login is required.")
             if not args.serve:
-                print("Set DMASIF_WEBHOOK_SECRET_FILE and DMASIF_VIEWER_PASSWORD_FILE to the files in this directory.")
+                print("Set DMASIF_WEBHOOK_SECRET_FILE to the webhook-secret file in this directory.")
                 print(f"Then run dmasif-console --config {config_path} worker and dmasif-console --config {config_path} web.")
                 return
             from .web import create_app

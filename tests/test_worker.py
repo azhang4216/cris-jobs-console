@@ -197,9 +197,10 @@ def test_restore_marker_prevents_new_submission(setup):
 def test_real_local_demo_runs_two_researchers_with_isolated_outputs(tmp_path, monkeypatch):
     from dmasif_console.config import load_settings
     from dmasif_console.demo import prepare_demo
-    config, _ = prepare_demo(tmp_path / "demo")
+    config = prepare_demo(tmp_path / "demo")
     monkeypatch.setenv("DMASIF_WEBHOOK_SECRET_FILE", str(config.parent / "webhook-secret"))
-    monkeypatch.setenv("DMASIF_VIEWER_PASSWORD_FILE", str(config.parent / "viewer-password"))
+    assert not (config.parent / "viewer-password").exists()
+    monkeypatch.delenv("DMASIF_VIEWER_PASSWORD_FILE", raising=False)
     monkeypatch.delenv("DMASIF_WEBHOOK_SECRET", raising=False)
     monkeypatch.delenv("DMASIF_VIEWER_PASSWORD", raising=False)
     settings = load_settings(config)
@@ -225,7 +226,7 @@ def test_restore_recovers_newer_remote_runs_and_delivery_dedup(tmp_path, monkeyp
     from dmasif_console.config import load_settings
     from dmasif_console.demo import prepare_demo
     from dmasif_console.transport import FakeAdapter
-    config, _ = prepare_demo(tmp_path / "demo")
+    config = prepare_demo(tmp_path / "demo")
     settings = load_settings(config)
     remote = FakeAdapter(settings)
     original_store = Store(settings.database_path)
@@ -273,7 +274,7 @@ def test_restore_reconciles_terminal_history_and_one_live_job(tmp_path, monkeypa
     from dmasif_console.config import load_settings
     from dmasif_console.demo import prepare_demo
     from dmasif_console.transport import FakeAdapter
-    config, _ = prepare_demo(tmp_path / "demo")
+    config = prepare_demo(tmp_path / "demo")
     settings = load_settings(config)
     remote = FakeAdapter(settings)
     store = Store(settings.database_path)
@@ -344,9 +345,9 @@ def test_resolution_uses_private_evidence_without_resubmission(setup):
     assert adapter.submit_count == 0
     events = store.events(run_id)
     assert any(event["detail"].get("private_attestation", {}).get("evidence") == "private-ticket-reference" for event in events)
-    settings = settings.model_copy(update={"viewer_password": "viewer-password-123", "webhook_secret": "webhook-secret-value-123"})
+    settings = settings.model_copy(update={"webhook_secret": "webhook-secret-value-123"})
     client = TestClient(create_app(settings))
-    response = client.get(f"/api/runs/{run_id}", auth=("lab", settings.viewer_password))
+    response = client.get(f"/api/runs/{run_id}")
     assert response.status_code == 200
     assert "private-ticket-reference" not in response.text
     assert "private-investigation-details" not in response.text
@@ -369,7 +370,7 @@ def test_restore_accepts_audited_resolution_after_rechecking_scheduler(tmp_path,
     from dmasif_console.config import load_settings
     from dmasif_console.demo import prepare_demo
     from dmasif_console.transport import FakeAdapter
-    config, _ = prepare_demo(tmp_path / "demo")
+    config = prepare_demo(tmp_path / "demo")
     settings = load_settings(config)
     remote = FakeAdapter(settings)
     def lost_before_submit(run):

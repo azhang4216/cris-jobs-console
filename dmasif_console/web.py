@@ -1,17 +1,15 @@
-"""Private read-only dashboard and a signed, durable GitHub webhook receiver.
+"""Public read-only dashboard and a signed, durable GitHub webhook receiver.
 
 The web routes never use cluster credentials. In a single-service deployment,
 web and worker share the same backend filesystem and secret-access boundary.
 """
 from __future__ import annotations
 
-import base64
 import hashlib
 import hmac
 import json
 import os
 import re
-import secrets
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -123,8 +121,8 @@ def public_run(run: dict, settings: Settings) -> dict:
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or load_settings()
     maintenance = maintenance_enabled()
-    if len(settings.webhook_secret) < 16 or len(settings.viewer_password) < 12:
-        raise ValueError("Configure a webhook secret (16+ characters) and shared viewer password (12+ characters).")
+    if len(settings.webhook_secret) < 16:
+        raise ValueError("Configure a webhook secret (16+ characters).")
     store = Store(settings.database_path)
     if not maintenance:
         store.initialize()
@@ -137,23 +135,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                        "poll_seconds": settings.poll_seconds, "repository_url": settings.repository.url}
 
     @app.middleware("http")
-    async def viewer_auth_and_headers(request: Request, call_next):
-        public_endpoint = request.url.path in {"/healthz", "/webhooks/github"}
-        authorized = public_endpoint
-        if not authorized:
-            auth = request.headers.get("authorization", "")
-            if len(auth) < 4096 and auth.lower().startswith("basic "):
-                try:
-                    username, password = base64.b64decode(auth[6:], validate=True).decode().split(":", 1)
-                    user_ok = secrets.compare_digest(username.encode(), settings.viewer_username.encode())
-                    password_ok = secrets.compare_digest(password.encode(), settings.viewer_password.encode())
-                    authorized = user_ok and password_ok
-                except (ValueError, UnicodeError):
-                    pass
-        if not authorized:
-            response = JSONResponse({"detail": "Shared lab viewing password required"}, status_code=401,
-                                    headers={"WWW-Authenticate": 'Basic realm="Surface Lab", charset="UTF-8"'})
-        elif maintenance and request.url.path != "/healthz":
+    async def maintenance_and_headers(request: Request, call_next):
+        # Viewing is public. Only the webhook accepts writes, with its own HMAC
+        # and repository/sender checks; operator actions stay in the local CLI.
+        if maintenance and request.url.path != "/healthz":
             response = JSONResponse({"detail": "Console maintenance is in progress. Please try again later."},
                                     status_code=503, headers={"Retry-After": "60"})
         else:

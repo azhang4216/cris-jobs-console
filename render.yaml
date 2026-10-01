@@ -38,5 +38,3 @@ services:
         value: "3"
       - key: DMASIF_WEBHOOK_SECRET
         sync: false
-      - key: DMASIF_VIEWER_PASSWORD
-        sync: false

@@ -1,6 +1,6 @@
 # Run a dMaSIF experiment
 
-Use your normal Git workflow and the lab dashboard. You do not need an SSH login or a personal website account. The operator supplies the approved research repository, dashboard URL, shared viewer credentials, and enabled dataset IDs.
+Use your normal Git workflow and the lab dashboard. You do not need an SSH login or a website account. The operator supplies the approved research repository, dashboard URL, and enabled dataset IDs. The dashboard's run details, logs, and result downloads are public; open the URL without signing in. Your personal GitHub account identifies and authorizes your submissions.
 
 This first release performs **feature extraction** with the tested dMaSIF interface. Full training, arbitrary uploads, and new software dependencies need a later tested runtime/adapter release.
 

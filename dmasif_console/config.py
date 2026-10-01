@@ -131,7 +131,9 @@ class Settings(StrictModel):
     operator_contact: str = "Ask your lab operator"
     poll_seconds: int = Field(default=5, ge=1, le=300)
     submissions_enabled: bool = False
-    viewer_username: str = "lab"
+    # Legacy settings remain readable so existing deployments can upgrade.
+    # They never gate viewing; retain the old password only for log redaction.
+    viewer_username: str = Field(default="lab", exclude=True)
     viewer_password: str = Field(default="", repr=False, exclude=True)
     webhook_secret: str = Field(default="", repr=False, exclude=True)
     datasets: dict[str, DatasetConfig] = Field(default_factory=dict)

@@ -32,8 +32,7 @@ services:
       DMASIF_CONFIG: /run/secrets/operator_config
       DMASIF_STATE_DIR: /var/lib/dmasif-console
       DMASIF_WEBHOOK_SECRET_FILE: /run/secrets/webhook_secret
-      DMASIF_VIEWER_PASSWORD_FILE: /run/secrets/viewer_password
-    secrets: [operator_config, webhook_secret, viewer_password]
+    secrets: [operator_config, webhook_secret]
     expose: ["8000"]
     healthcheck:
       test: [CMD, python, -c, "import socket; socket.create_connection(('127.0.0.1', 8000), timeout=3).close()"]
@@ -79,8 +78,6 @@ secrets:
     file: ${OPERATOR_CONFIG_FILE:-./private/operator.yaml}
   webhook_secret:
     file: ${WEBHOOK_SECRET_FILE:-./private/webhook-secret}
-  viewer_password:
-    file: ${VIEWER_PASSWORD_FILE:-./private/viewer-password}
   cluster_ssh_key:
     file: ${CLUSTER_SSH_KEY_FILE:-./private/cluster-key}
   cluster_known_hosts:

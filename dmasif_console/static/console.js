@@ -364,8 +364,8 @@
   }
 
   async function getJSON(path) {
-    const response = await fetch(`${apiBase}${path}`, { headers: { Accept: "application/json" }, credentials: "same-origin", cache: "no-store", signal: AbortSignal.timeout(12000) });
-    if (!response.ok) throw new Error(response.status === 401 ? "Viewer session needs refreshing" : `Status service returned ${response.status}`);
+    const response = await fetch(`${apiBase}${path}`, { headers: { Accept: "application/json" }, credentials: "omit", cache: "no-store", signal: AbortSignal.timeout(12000) });
+    if (!response.ok) throw new Error(`Status service returned ${response.status}`);
     return response.json();
   }
 

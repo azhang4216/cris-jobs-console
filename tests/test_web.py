@@ -43,10 +43,6 @@ def signed(client, settings, data=None, delivery="delivery-1", body=None):
     })
 
 
-def auth(settings):
-    return (settings.viewer_username, settings.viewer_password)
-
-
 def test_signed_push_durable_and_identity_is_sender_not_author(client, settings):
     response = signed(client, settings)
     assert response.status_code == 202
@@ -61,8 +57,8 @@ def test_signed_push_durable_and_identity_is_sender_not_author(client, settings)
     assert run["body_hash"]
     assert run["policy"]["cluster"]["host"] == "private-login.invalid"
     assert "ssh_key_path" not in run["policy"]["cluster"]
-    assert client.get("/", auth=auth(settings)).status_code == 200
-    assert client.get("/runs/" + run["id"], auth=auth(settings)).status_code == 200
+    assert client.get("/").status_code == 200
+    assert client.get("/runs/" + run["id"]).status_code == 200
 
 
 def test_replay_and_changed_delivery_header_return_same_run(client, settings):
@@ -173,28 +169,61 @@ def test_queue_limit_rejection_remains_visible(client, settings):
     assert Store(settings.database_path).get_run(second["run_id"])["state"] == "REJECTED"
 
 
-def test_private_routes_require_shared_password_and_have_no_mutations(client, settings):
-    for path in ("/", "/api/runs", "/api/runs/nope/logs", "/artifacts/nope", "/static/console.js"):
-        assert client.get(path).status_code == 401
-        assert client.get(path, auth=("lab", "wrong")).status_code == 401
+def test_viewing_is_public_even_with_legacy_credentials_and_has_no_mutations(client, settings):
+    run_id = signed(client, settings).json()["run_id"]
+    for path in ("/", "/api/runs", "/runs/" + run_id, "/api/runs/" + run_id,
+                 "/api/runs/" + run_id + "/logs", "/static/console.js", "/static/console.css"):
+        response = client.get(path)
+        assert response.status_code == 200
+        assert "www-authenticate" not in response.headers
+        # A stale browser Basic header must not reintroduce an authentication gate.
+        assert client.get(path, auth=("lab", "wrong")).status_code == 200
+    for path in ("/runs/nope", "/api/runs/nope", "/api/runs/nope/logs", "/artifacts/nope", "/artifacts/" + "f" * 64):
+        assert client.get(path).status_code == 404
     assert client.get("/healthz").json() == {"status": "ok"}
-    assert client.post("/api/runs", auth=auth(settings)).status_code == 405
-    assert client.get("/openapi.json", auth=auth(settings)).status_code == 404
+    for method in ("POST", "PUT", "DELETE"):
+        assert client.request(method, "/api/runs").status_code == 405
+        assert client.request(method, "/api/runs/" + run_id).status_code == 405
+    for action in ("submit", "cancel", "retry"):
+        assert client.post("/api/runs/" + run_id + "/" + action).status_code == 404
+    assert client.get("/openapi.json").status_code == 404
+    assert len(Store(settings.database_path).list_runs()) == 1
+
+
+def test_viewing_needs_no_password_configuration(settings):
+    settings.viewer_password = ""
+    with TestClient(create_app(settings)) as client:
+        assert client.get("/").status_code == 200
+        assert client.get("/api/runs").status_code == 200
+        assert client.post("/webhooks/github", json=payload()).status_code == 401
+        assert signed(client, settings).status_code == 202
+
+
+@pytest.mark.parametrize("secret", ["", "too-short"])
+def test_web_startup_still_requires_a_strong_webhook_secret(settings, secret):
+    settings.webhook_secret = secret
+    settings.viewer_password = ""
+    with pytest.raises(ValueError, match="webhook secret"):
+        create_app(settings)
+    assert not settings.database_path.exists()
 
 
 def test_public_projection_excludes_login_details_and_redacts_logs(client, settings):
     run_id = signed(client, settings).json()["run_id"]
     store = Store(settings.database_path)
     store.update_run(run_id, {
-        "remote_dir": "/private/cluster/runs/secret", "log_tail": "private-user@private-login.invalid /private/cluster/results private-account",
+        "remote_dir": "/private/cluster/runs/secret", "log_tail": "private-user@private-login.invalid /private/cluster/results private-account "
+                    + settings.webhook_secret + " " + settings.viewer_password
+                    + " -----BEGIN OPENSSH PRIVATE KEY-----synthetic-private-key-----END OPENSSH PRIVATE KEY-----",
         "provenance": {"runtime_sha256": "c" * 64, "module_paths": {"model": "/private/cluster/model.py"}},
         "result": {"expected": 1, "valid": 0, "provenance": {"checkpoint_path": "/private/checkpoint"},
                    "artifacts": [{"relative_path": "/private/cluster/results"}]},
     })
     for route in ("/api/runs", "/api/runs/" + run_id, "/api/runs/" + run_id + "/logs", "/runs/" + run_id):
-        response = client.get(route, auth=auth(settings))
+        response = client.get(route)
         assert response.status_code == 200
-        for private in ("private-login.invalid", "private-user", "private-account", "/private/cluster", "ssh_key_path", "checkpoint_path", "module_paths"):
+        for private in ("private-login.invalid", "private-user", "private-account", "/private/cluster", "ssh_key_path", "checkpoint_path", "module_paths",
+                        settings.webhook_secret, settings.viewer_password, "synthetic-private-key"):
             assert private not in response.text
 
 
@@ -209,14 +238,14 @@ def test_artifact_download_requires_cached_checksum_and_contained_path(client, s
                 "cache_state": "cached", "cache_path": "/should/not/be/trusted"}
     store = Store(settings.database_path)
     store.update_run(run_id, {"artifacts": [metadata]})
-    assert client.get("/artifacts/" + aid, auth=auth(settings)).content == content
+    assert client.get("/artifacts/" + aid).content == content
     target.write_bytes(b"tampered")
-    assert client.get("/artifacts/" + aid, auth=auth(settings)).status_code == 410
+    assert client.get("/artifacts/" + aid).status_code == 410
     target.unlink()
     outside = tmp_path / "outside"
     outside.write_bytes(content)
     target.symlink_to(outside)
-    assert client.get("/artifacts/" + aid, auth=auth(settings)).status_code == 410
+    assert client.get("/artifacts/" + aid).status_code == 410
 
 
 def test_old_cluster_identity_remains_private_after_configuration_rotation(client, settings):
@@ -229,21 +258,21 @@ def test_old_cluster_identity_remains_private_after_configuration_rotation(clien
     store.update_run(run_id, {"policy": run["policy"], "log_tail": message, "reason": message})
     store.add_event(run_id, "FAILED", {"reason": message})
     for route in ("/api/runs", "/api/runs/" + run_id, "/api/runs/" + run_id + "/logs", "/runs/" + run_id):
-        text = client.get(route, auth=auth(settings)).text
+        text = client.get(route).text
         assert all(secret not in text for secret in old.values())
 
 
 def test_effective_pause_and_full_history_filtering(client, settings):
-    data = client.get("/api/runs", auth=auth(settings)).json()
+    data = client.get("/api/runs").json()
     assert data["control"]["paused"]
     settings.submissions_enabled = True
-    assert not client.get("/api/runs", auth=auth(settings)).json()["control"]["paused"]
+    assert not client.get("/api/runs").json()["control"]["paused"]
     store = Store(settings.database_path)
     for i in range(205):
         store.accept_delivery("hook", f"old-{i}", hashlib.sha256(f"old-{i}".encode()).hexdigest(), {},
                               "ACCEPTED", "", {"state": "SUCCEEDED", "commit_sha": "a" * 40,
                                                "actor_login": "alice", "experiment": "old-target" if i == 0 else "newer"})
-    response = client.get("/api/runs?experiment=old-target", auth=auth(settings)).json()
+    response = client.get("/api/runs?experiment=old-target").json()
     assert len(response["runs"]) == 1
     assert response["runs"][0]["experiment"] == "old-target"
     assert response["actors"] == ["alice"]
@@ -254,6 +283,6 @@ def test_terminal_unknown_end_time_does_not_invent_runtime(client, settings):
     store = Store(settings.database_path)
     store.update_run(run_id, {"state": "FAILED", "started_at": "2026-09-30T12:00:00+00:00"},
                      event={"kind": "state_changed", "detail": {"reason": "Scheduler failed; end time unavailable."}})
-    data = client.get("/api/runs/" + run_id, auth=auth(settings)).json()
+    data = client.get("/api/runs/" + run_id).json()
     assert data["run"]["runtime_seconds"] is None
     assert data["events"][0]["reason"] == "Scheduler failed; end time unavailable."

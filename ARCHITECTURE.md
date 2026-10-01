@@ -1,11 +1,11 @@
 # dMaSIF job submission architecture
 
-Revision: R5, September 30, 2026. Run branches use experiment names with automatic pusher attribution; hosting remains the selected single Render application. The R3 specialist review remains recorded below with its original scope.
+Revision: R6, September 30, 2026. The read-only dashboard is public with no viewing login. Run branches use experiment names with automatic pusher attribution; hosting remains the selected single Render application. The R3 specialist review remains recorded below with its original scope.
 Scope: local architecture only. No service has been deployed and no cluster files or jobs have been changed for this design. Cluster paths below are proposed unless listed as observed.
 
 ## 1. Decision and first release
 
-Build a **push-to-run service with a read-only experiment dashboard**. Each researcher uses their own GitHub account, pushes an experiment branch, and sees the resulting job on the website. The backend holds the SSH credential and submits through Collin's cluster account. Researchers need neither cluster credentials nor separate website accounts.
+Build a **push-to-run service with a public, read-only experiment dashboard**. Each researcher uses their own GitHub account, pushes an experiment branch, and sees the resulting job on the website. The backend holds the SSH credential and submits through Collin's cluster account. Researchers need neither cluster credentials nor website accounts.
 
 Start with **feature extraction**, the workflow already demonstrated on the cluster. Full model training needs a later adapter for configuration, checkpoints, resumption, and resource limits. The submission service and dashboard can support it; switching the scientific task is more than changing one command.
 
@@ -104,11 +104,11 @@ Keep allowed repository/actor IDs, dataset manifests, runtime release, resource 
 
 Use a small separate infrastructure repository for the service; the lab's research fork based on `modern-stack` supplies experiment code. The Render Blueprint selects the infrastructure `main` branch and disables automatic deployments and preview environments. Operators manually deploy reviewed infrastructure revisions. A research push cannot deploy changes to the application's service. Never execute research setup scripts on that host. A deployed adapter controls preparation, scheduler options, invocation, and validation.
 
-Render secret files supply the SSH key, verified host entry, private operator configuration, and optional repository-read token. Webhook/viewer secrets are entered in Render's environment settings; the Blueprint contains no secret values. The image's explicit build-context allowlist excludes secret files, including copies Render adds during builds. Use batch SSH, strict host-key verification, bounded timeouts, and no agent forwarding. Credentials never enter Git, source archives, logs, browser responses, or job directories. [Render secret files](https://render.com/docs/configure-environment-variables#secret-files), [Docker build secrets](https://render.com/docs/docker)
+Render secret files supply the SSH key, verified host entry, private operator configuration, and optional repository-read token. The webhook secret is entered in Render's environment settings; the Blueprint contains no secret values. The image's explicit build-context allowlist excludes secret files, including copies Render adds during builds. Use batch SSH, strict host-key verification, bounded timeouts, and no agent forwarding. Credentials never enter Git, source archives, logs, browser responses, or job directories. [Render secret files](https://render.com/docs/configure-environment-variables#secret-files), [Docker build secrets](https://render.com/docs/docker)
 
 **The single Render service is one backend trust boundary.** The web and worker share a service and OS user. The key is hidden from browser clients, but is accessible to backend code and trusted Render administrators. A web-process compromise can therefore expose the credential. This consciously replaces R3's separate-container credential boundary in exchange for simpler hosting. The optional Linux Compose deployment retains separate web/worker secret mounts.
 
-Protect pages, APIs, logs, and downloads with a shared viewer password over HTTPS, or the lab's existing access gateway. This gate does not identify submitters. The webhook uses its own signature authentication. There are no browser write actions.
+Serve dashboard pages, run APIs, logs, and result downloads publicly over HTTPS without a viewing login. The lab has chosen public visibility for run metadata and results. Keeping the GitHub repositories private protects source access, not the website; commit links still require GitHub repository access. Saved source archives and private operator state have no public download route. The webhook retains its signature, repository, and approved numeric sender checks. There are no browser write actions.
 
 **This is trusted execution under one Unix account.** Attribution and isolated directories guard normal mistakes; they do not provide OS isolation or tamper-proof records between people/code with Collin's permissions. Containers and read-only mounts do not make this a hostile-code sandbox. Only the trusted repository and allowed researchers can submit.
 
@@ -262,7 +262,7 @@ Poll bounded log tails while jobs run; fetch small validated results automatical
 
 Transfer/cache failure does not change a verified scientific success. Show download pending/unavailable with reason and operator retrieval path. Oversized results stay on the cluster. Evict old local copies within the cap and label them unavailable; no general on-demand transfer queue in v1. Retain metadata. Do not automatically delete cluster results; monitor disk space and pause submissions at a configured low-space threshold.
 
-Minimal routes: `POST /webhooks/github`; read-only `GET /`, `/runs/{id}`, `/api/runs`, `/api/runs/{id}`, `/api/runs/{id}/logs`, `/artifacts/{id}`. Protect all viewer routes. Browser polling reads local state and never triggers SSH or GPU work.
+Minimal routes: authenticated `POST /webhooks/github`; public, read-only `GET /`, `/runs/{id}`, `/api/runs`, `/api/runs/{id}`, `/api/runs/{id}/logs`, `/artifacts/{id}`. Browser polling reads local state and never triggers SSH or GPU work.
 
 ## 10. Build sequence and acceptance checks
 
@@ -295,7 +295,7 @@ Acceptance checks:
 - Worker restart and SSH loss after submission reconcile without a second `sbatch`; ambiguity retains capacity.
 - Duplicate execution/forced restart cannot overwrite an original run.
 - Application waiting differs from Slurm queuing; stale monitoring and cache failures do not invent scientific failures.
-- Viewer routes cannot submit/cancel or reveal credentials; logs render as text; artifact IDs cannot escape the cache.
+- Pages, APIs, logs, and validated downloads work without login; public routes cannot submit/cancel or reveal credentials; logs render as text; artifact IDs cannot escape the cache.
 
 Back up SQLite consistently with retained source archives. The Render service schedules a backup every 24 hours and keeps three automatic copies on the persistent disk. Keep configuration, manifests, release hashes, and secrets recoverable separately. An operator exports completed backups to approved private storage; off-service export is not automated in v1. Same-disk backups cannot recover loss of that disk or service.
 
@@ -305,7 +305,7 @@ Every remote `request.json` retains the hook/delivery identity and verified-body
 
 ## 11. Review decisions and scope control
 
-Reliability, researcher UX, and simplicity reviewers agreed on the core workflow and requested a smaller first release. R3 removed individual web accounts, eleven-table registries, retry-attempt machinery, generic operation queues/leases, artifact-fetch queues, comparison screens, and training controls. R4 selects one Render application and local SQLite in response to the lab's hosting preference, preserving that smaller workflow.
+Reliability, researcher UX, and simplicity reviewers agreed on the core workflow and requested a smaller first release. R3 removed individual web accounts, eleven-table registries, retry-attempt machinery, generic operation queues/leases, artifact-fetch queues, comparison screens, and training controls. R4 selects one Render application and local SQLite in response to the lab's hosting preference, preserving that smaller workflow. R5 simplifies run branch names; R6 removes the viewing password following the lab's decision to make results public, while retaining authenticated submissions and private backend credentials.
 
 It keeps safeguards tied to actual or credible failures: GitHub attribution, pinned execution, unique run/job output directories, expected-output validation, replay protection, durable submission evidence, and reconciliation of ambiguous submission.
 

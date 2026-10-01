@@ -224,10 +224,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 decision, reason = "REJECTED", "Pushing account is not an allowed personal GitHub account"
             else:
                 branch = ref.removeprefix("refs/heads/")
-                parts = branch.split("/", 2)
+                experiment = branch.removeprefix("runs/")
                 sha = payload.get("after", "")
-                if len(parts) != 3 or parts[1].lower() != login.lower() or not parts[2]:
-                    decision, reason = "REJECTED", "Run branch must be runs/YOUR_GITHUB_LOGIN/experiment"
+                if not experiment.strip():
+                    decision, reason = "REJECTED", "Run branch must be runs/experiment-name"
                 elif not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}", sha) or sha == "0" * 40:
                     raise HTTPException(400, "Push must identify an exact commit SHA")
                 else:
@@ -242,7 +242,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "state": "CHECKING_REQUEST", "actor_id": actor_id, "actor_login": login,
                         "repository_id": settings.repository.id, "repository": settings.repository.full_name,
                         "commit_sha": sha, "commit_url": f"{settings.repository.url}/commit/{sha}",
-                        "ref": ref, "branch": branch, "experiment": parts[2], "before_sha": payload.get("before"),
+                        "ref": ref, "branch": branch, "experiment": experiment, "before_sha": payload.get("before"),
                         "forced": bool(payload.get("forced", False)), "commit_author": author("author"),
                         "commit_committer": author("committer"), "policy": settings.policy_snapshot(),
                     }

@@ -1,6 +1,6 @@
 # dMaSIF job submission architecture
 
-Revision: R4, September 30, 2026. Hosting updated to the selected single Render application. The R3 specialist review remains recorded below with its original scope.
+Revision: R5, September 30, 2026. Run branches use experiment names with automatic pusher attribution; hosting remains the selected single Render application. The R3 specialist review remains recorded below with its original scope.
 Scope: local architecture only. No service has been deployed and no cluster files or jobs have been changed for this design. Cluster paths below are proposed unless listed as observed.
 
 ## 1. Decision and first release
@@ -42,7 +42,9 @@ Other QoS associations exist, but v1 enables only the tested preset. The schedul
 
 ## 2. Researcher workflow
 
-The designated branch convention is `runs/<github-login>/<experiment>`. Develop on ordinary branches; push a run branch when ready to spend GPU time. The owner segment must match the verified pushing actor's login, case-insensitively. Stable numeric GitHub IDs remain the authorization key.
+The designated branch convention is `runs/<experiment>`, for example `runs/pocket-v1`. Develop on ordinary branches; push a run branch when ready to spend GPU time. The signed webhook's `sender.login` identifies who pushed, and stable numeric `sender.id` values remain the authorization key. Branch names do not determine researcher identity or ownership.
+
+Branch names are shared within the research repository. Use distinct experiment names for independent work. Any approved researcher may push to the same run branch; each qualifying push is attributed to its actual sender and receives a new run UUID and output directory. Researchers may include a username in an experiment name for convenience, but the application never interprets it as identity.
 
 Copy this file to `experiments/run.yaml`:
 
@@ -55,10 +57,10 @@ seed: 0
 repeat_id: first-run
 ```
 
-For a first experiment, replace the example login/name, commit the intended code and configuration, and push:
+For a first experiment, choose an experiment name, commit the intended code and configuration, and push:
 
 ```bash
-git switch -c runs/YOUR_GITHUB_LOGIN/pocket-v1
+git switch -c runs/pocket-v1
 git add experiments/run.yaml affinity/extract.py
 git commit -m "Run pocket-v1 feature extraction"
 git push -u origin HEAD
@@ -114,7 +116,7 @@ Protect pages, APIs, logs, and downloads with a shared viewer password over HTTP
 
 Verify GitHub's HMAC signature against the unmodified body. Enforce a size limit, expected event type, and approved repository ID; source fetching uses configured repository details, not an arbitrary payload URL. Acknowledge only after committing the delivery and initial run to SQLite; prepare asynchronously. [Signature validation](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries)
 
-Use the signed payload's `sender.id` and login as **triggered by**. Store commit author/committer separately. Author email and the branch's username are not proof of who pushed. Unknown actors, bots, and shared service accounts cannot submit in v1. Researchers must use personal GitHub identities. [Push payload](https://docs.github.com/en/webhooks/webhook-events-and-payloads#push)
+Use the signed payload's `sender.id` and `sender.login` as **triggered by**. Store commit author/committer separately. Author email and branch names are not proof of who pushed. There is no branch-owner restriction: authorization checks the sender's approved numeric ID. Unknown actors, bots, and shared service accounts cannot submit in v1. Researchers must use personal GitHub identities. [Push payload](https://docs.github.com/en/webhooks/webhook-events-and-payloads#push)
 
 Ignore non-run branches, tags, and branch deletions, recording reasons for approved-repository deliveries. Record actor/branch-policy rejections. An eligible run-branch event creates a visible run immediately, even if configuration later fails validation.
 

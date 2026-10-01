@@ -29,7 +29,7 @@ def client(settings):
         yield test_client
 
 
-def payload(actor=7, login="alice", branch="runs/alice/pocket-v1", sha="a" * 40):
+def payload(actor=7, login="alice", branch="runs/pocket-v1", sha="a" * 40):
     return {"repository": {"id": 42, "full_name": "untrusted-url/name"}, "sender": {"id": actor, "login": login, "type": "User"},
             "ref": "refs/heads/" + branch, "after": sha, "before": "b" * 40, "deleted": False,
             "head_commit": {"author": {"name": "Someone Else", "email": "someone@example.org"}}}
@@ -52,6 +52,9 @@ def test_signed_push_durable_and_identity_is_sender_not_author(client, settings)
     assert response.status_code == 202
     run = Store(settings.database_path).get_run(response.json()["run_id"])
     assert run["actor_login"] == "alice"
+    assert run["actor_id"] == 7
+    assert run["branch"] == "runs/pocket-v1"
+    assert run["experiment"] == "pocket-v1"
     assert run["commit_author"]["name"] == "Someone Else"
     assert run["commit_url"] == "https://github.com/lab/research/commit/" + "a" * 40
     assert run["state"] == "CHECKING_REQUEST"
@@ -83,17 +86,49 @@ def test_concurrent_acceptance_is_atomic(client, settings):
 
 def test_distinct_push_same_sha_on_other_experiment_creates_new_run(client, settings):
     first = signed(client, settings).json()
-    second = signed(client, settings, payload(branch="runs/alice/another"), delivery="delivery-2").json()
+    second = signed(client, settings, payload(branch="runs/another"), delivery="delivery-2").json()
     assert first["run_id"] != second["run_id"]
 
 
-@pytest.mark.parametrize("data", [payload(actor=999), payload(branch="runs/bob/pocket-v1"),
+@pytest.mark.parametrize("data", [payload(actor=999),
                                   {**payload(), "sender": {"id": 7, "login": "alice", "type": "Bot"}}])
-def test_disallowed_actors_and_branch_owner_are_recorded_not_submitted(client, settings, data):
+def test_disallowed_actors_are_recorded_not_submitted(client, settings, data):
     response = signed(client, settings, data)
     assert response.status_code == 202
     assert response.json()["decision"] == "REJECTED"
     assert response.json()["run_id"] is None
+    assert Store(settings.database_path).list_runs() == []
+
+
+def test_two_researchers_on_same_branch_are_attributed_to_each_pusher(client, settings):
+    first = signed(client, settings).json()
+    data = payload(actor=8, login="bob", sha="c" * 40)
+    data["pusher"] = {"name": "Untrusted commit identity", "email": "someone@example.invalid"}
+    second = signed(client, settings, data, delivery="bob-push").json()
+    store = Store(settings.database_path)
+    alice, bob = store.get_run(first["run_id"]), store.get_run(second["run_id"])
+    assert alice["id"] != bob["id"]
+    assert alice["branch"] == bob["branch"] == "runs/pocket-v1"
+    assert alice["experiment"] == bob["experiment"] == "pocket-v1"
+    assert (alice["actor_id"], alice["actor_login"]) == (7, "alice")
+    assert (bob["actor_id"], bob["actor_login"]) == (8, "bob")
+    assert alice["commit_sha"] == "a" * 40
+    assert bob["commit_sha"] == "c" * 40
+    assert bob["commit_author"]["name"] == "Someone Else"
+    assert signed(client, settings, data, delivery="bob-redelivery").json()["run_id"] == bob["id"]
+
+
+def test_branch_name_never_supplies_researcher_identity(client, settings):
+    response = signed(client, settings, payload(actor=8, login="bob", branch="runs/alice/pocket-v1"))
+    run = Store(settings.database_path).get_run(response.json()["run_id"])
+    assert (run["actor_id"], run["actor_login"]) == (8, "bob")
+    assert run["experiment"] == "alice/pocket-v1"
+
+
+def test_run_branch_requires_an_experiment_name(client, settings):
+    response = signed(client, settings, payload(branch="runs/"))
+    assert response.status_code == 202
+    assert response.json()["decision"] == "REJECTED"
     assert Store(settings.database_path).list_runs() == []
 
 

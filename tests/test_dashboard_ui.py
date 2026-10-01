@@ -29,7 +29,7 @@ def test_empty_history_teaches_submission_without_browser_write_controls(templat
     page = templates.get_template("history.html").render(**common, runs=[], activity=[], stats={}, filters={})
     assert "No cluster jobs are submitted" in page
     assert "experiments/run.yaml" in page
-    assert "runs/YOUR_GITHUB_LOGIN/pocket-v1" in page
+    assert "runs/pocket-v1" in page
     assert "Where is my run?" in page
     assert 'method="post"' not in page.lower()
     assert 'type="file"' not in page.lower()

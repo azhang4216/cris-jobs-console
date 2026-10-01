@@ -66,7 +66,7 @@ def prepare_demo(state_dir: Path) -> tuple[Path, str]:
         _git(fixture, "add", ".")
         _git(fixture, "commit", "-qm", f"Local fake extraction {index}")
         commit = _git(fixture, "rev-parse", "HEAD")
-        branch = f"runs/{login}/pocket-v1"
+        branch = f"runs/pocket-v{index}"
         _git(fixture, "branch", branch, commit)
         payload = {"ref": f"refs/heads/{branch}", "after": commit, "before": "0" * 40,
                    "created": True, "deleted": False, "forced": False,

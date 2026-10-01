@@ -32,12 +32,14 @@ The demo needs the development dependencies because it exercises the real ASGI r
 
 ## Researcher workflow
 
-In the **research repository**, copy [config/run.example.yaml](config/run.example.yaml) to `experiments/run.yaml`, commit the desired code, and push a branch named `runs/YOUR_GITHUB_LOGIN/experiment-name`.
+In the **research repository**, copy [config/run.example.yaml](config/run.example.yaml) to `experiments/run.yaml`, commit the desired code, and push a branch named `runs/experiment-name`, for example `runs/pocket-v1`. Your username is not required in the branch name.
 
 - Each qualifying push creates one run for the final full commit SHA.
-- GitHub's verified pushing account identifies the researcher; commit authorship is recorded separately.
+- The signed GitHub webhook identifies the researcher who pushed by account login and numeric ID; commit authorship is recorded separately.
 - A repeated webhook returns the existing run. A new configuration commit changing `repeat_id` creates a separate run.
 - All job outcomes appear on the dashboard, including rejected configuration and missing outputs.
+
+Branch names are shared within the repository. Use different experiment names for independent work; any approved researcher can push to a shared run branch, and each qualifying push gets its own run and outputs.
 
 See [the researcher guide](docs/researcher.md) for the first-run steps and recovery help.
 

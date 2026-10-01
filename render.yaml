@@ -14,7 +14,7 @@ services:
     autoDeployTrigger: "off"
     numInstances: 1
     healthCheckPath: /healthz
-    maxShutdownDelaySeconds: 60
+    # Disk-backed services use Render's default shutdown delay.
     disk:
       name: console-data
       mountPath: /var/data

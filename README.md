@@ -4,7 +4,7 @@ A small GitHub-to-Slurm job service for a research lab. Researchers push experim
 
 The first release supports the existing dMaSIF **feature-extraction** interface. Full training and checkpoint resumption need a later adapter. The local demonstration uses synthetic inputs/features and never executes research code, SSH, or GPU jobs.
 
-**Current free test setup:** run the app locally with a real SSH connection and share its read-only dashboard through a temporary HTTPS tunnel. See [the live cluster guide](docs/live-test.md). Render remains an optional later deployment; GitHub Pages cannot run the backend.
+**Current free pilot:** the local app receives signed pushes from the private research repository and submits isolated Slurm jobs. A temporary HTTPS tunnel connects GitHub and shares the read-only dashboard. See [the live submission guide](docs/live-submissions.md). The separate [cluster history guide](docs/live-test.md) covers observation without submissions. GitHub Pages cannot run the backend; an always-on host is still needed for permanent deployment.
 
 ## Researcher workflow
 
@@ -36,7 +36,7 @@ job_type: dmasif_extract
 preset_id: quick-test
 ```
 
-`demo-1stp-v1` is an example; the operator must register the dataset before it can run. Saving changes to this console's `config/run.example.yaml` does not submit an experiment—the request file is **`experiments/run.yaml` in the research repository**.
+`demo-1stp-v1` is the registered one-protein smoke-test dataset in the current pilot. Other datasets need operator registration. Saving changes to this console's `config/run.example.yaml` does not submit an experiment—the request file is **`experiments/run.yaml` in the research repository**.
 
 ### 2. Change the code, if needed
 
@@ -63,7 +63,7 @@ Replace `pocket-v1` with your experiment name. If you added `affinity/my_experim
 
 **The push submits the job.** A local save or commit alone does not. Each qualifying push to `runs/<experiment>` runs its final commit; ordinary development branches do not submit jobs. Repeat on an existing run branch by changing `repeat_id`, committing, and pushing again. Every run keeps separate outputs.
 
-Open the dashboard and select your run for logs and downloads. The local demo uses simulated pushes; real submissions require the operator to connect the research repository and enable jobs.
+Open the dashboard and select your run for status, logs, configuration, and downloads. The current pilot is connected to real GitHub pushes and Slurm; the operator must approve each researcher's numeric GitHub ID before that account can submit. The local demo below is a separate simulator.
 
 See [the researcher guide](docs/researcher.md) for configuration limits, results, and troubleshooting.
 
@@ -124,13 +124,13 @@ The existing [Docker Compose guide](docs/deployment.md) remains an alternative f
 
 - Real SSH keys, login notes, `.env` files, deployment secrets, and application state are ignored by Git. Private original notes remain in ignored `.local/` on this workstation.
 - Publishable code/docs use example cluster identities. Site-specific login details belong only in ignored operator configuration, mounted as a runtime secret.
-- Render stores the SSH key, verified `known_hosts`, and private operator configuration as secret files. The webhook secret is entered in Render, never in `render.yaml`.
+- The current pilot loads the SSH key, verified `known_hosts`, operator configuration, repository token, and webhook secret from protected local files. A hosted deployment uses private files or its secret manager, never committed secret values.
 - Dashboard pages, run APIs, logs, and result downloads are public and require no login. A private GitHub repository protects its source; it does not make the dashboard private. Only signed pushes from approved GitHub IDs can create runs; visitors cannot submit or cancel jobs.
-- The single Render service is one backend trust boundary: its administrator and backend processes can access its credentials. Browser clients cannot. The optional Compose setup provides separate web/worker secret mounts.
+- The single application is one backend trust boundary: its administrator and backend processes can access its credentials. Browser clients cannot. The optional Compose setup provides separate web/worker secret mounts.
 - Docker build contexts use an allowlist. Browser responses omit private policies/paths and redact current and historical cluster login identities from logs and errors.
 - An optional private-repository token belongs in a backend secret file. GitHub Actions secrets are not automatically runtime secrets; never put cluster credentials into a Pages bundle or experiment workflow.
 
-Keep Render administration limited to operators who may access the cluster credential. Sharing one cluster Unix identity provides attribution and protection from accidental overwrites, not isolation from trusted code already running under that identity.
+Keep application-host administration limited to operators who may access the cluster credential. Sharing one cluster Unix identity provides attribution and protection from accidental overwrites, not isolation from trusted code already running under that identity.
 
 ## Verify
 
@@ -142,6 +142,6 @@ node --check dmasif_console/static/console.js
 
 Tests cover signed/replayed webhooks, identity spoofing, concurrent acceptance, secret redaction, source pinning, output collisions, corrupt/incomplete results, lost submission receipts, duplicate execution claims, cache recovery, and restore reconciliation. They use local temporary data and fake scheduler commands.
 
-The observer has been connected to real Slurm history. A separate user-authorized manual extraction test uses an isolated source/input/output directory. The full GitHub-to-cluster submission path, frozen production runtime, and adapter installation still need their deployment checks; a manual test does not establish those.
+The live pilot has a frozen container, a versioned cluster adapter, and a signed webhook on the private research repository. Real pushes have verified invalid-config rejection and valid-job submission; duplicate delivery and application restart reuse the same run and scheduler job. GPU completion, scientific output validation, and permanent hosting must be confirmed separately before treating the pilot as fully accepted. See the [acceptance record](docs/acceptance-2026-10-01.md) and [verification procedure](docs/live-submissions.md#acceptance-checks).
 
 The design and review decisions are in [ARCHITECTURE.md](ARCHITECTURE.md).

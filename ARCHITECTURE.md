@@ -1,13 +1,15 @@
 # dMaSIF job submission architecture
 
-Revision: R7, September 30, 2026. Free live testing uses the laptop application and a temporary HTTPS tunnel. Render remains an optional deployment. A read-only SSH observer displays existing jobs without requiring the submission adapter. The R3 specialist review remains recorded below with its original scope.
-Scope: the live observer and one separately authorized manual extraction smoke test. The managed submission adapter/runtime has not been installed. Cluster paths below are proposed unless listed as observed; credentials and actual private test paths stay outside Git.
+Revision: R8, October 1, 2026. The free pilot receives signed GitHub pushes, submits isolated Slurm jobs, and serves a public dashboard from the laptop through a temporary HTTPS tunnel. Render remains optional. The R3 specialist review remains recorded below with its original scope.
+Scope: managed feature extraction from the private research repository. A frozen runtime and versioned adapter are installed in a new managed cluster root. The genuine invalid-config push, valid submission, replay protection, and restart recovery have passed; the valid GPU run is still queued, so execution and result acceptance remain unverified. Credentials and actual private paths stay outside Git.
 
 ## Current free live test
 
-Run FastAPI, SQLite, and a read-only Slurm observer on the laptop. A Cloudflare Quick Tunnel exposes the public website without paid hosting or a GitHub Pages frontend. The browser reads the local cache every 15 seconds; one shared observer polls SSH every 60 seconds, independently of viewer count. See [the live test guide](docs/live-test.md).
+Run FastAPI, SQLite, and one submitting worker on the laptop. A Cloudflare Quick Tunnel exposes the dashboard and signed webhook receiver without paid hosting or a GitHub Pages frontend. The browser reads cached state every 15 seconds; the worker checks active jobs every 30 seconds, independently of viewer count. See [the real submission guide](docs/live-submissions.md).
 
-Observation mode runs only bounded `squeue` and `sacct` queries. It rejects webhooks and submitting workers. Historical jobs retain unknown GitHub/code identities; scheduler completion is separate from validated scientific success. Existing logs/results are not associated with a job without evidence. This mode allows real visibility before enabling managed submissions.
+The current pilot requires the laptop and tunnel to stay running. A permanent public service needs an always-on host with persistent local storage and a stable HTTPS address; that host has not been selected. GitHub Pages cannot run the Python backend or worker.
+
+The separate [observation mode](docs/live-test.md) remains available for read-only inspection of historical jobs. It polls bounded `squeue`/`sacct` queries every 60 seconds, rejects submissions, and retains unknown provenance rather than inventing GitHub identities or results.
 
 ## 1. Decision and first release
 
@@ -17,8 +19,8 @@ Start with **feature extraction**, the workflow already demonstrated on the clus
 
 Keep the first release small:
 
-- One approved repository, four allowed GitHub identities, one extraction interface.
-- One demo dataset (`1STP`), one tested frozen runtime, one `quick-test` resource preset.
+- One approved research repository, four intended GitHub identities, one extraction interface. Only the operator's identity is approved in the current pilot; the other three must be provided before they can submit.
+- One demo dataset (`1STP`), one frozen runtime, one `quick-test` resource preset. The runtime's CPU launch passed; managed GPU validation is pending.
 - One application host running the web process and one worker, with SQLite and local files. Free live testing uses the laptop; Render is an optional deployment with a persistent disk.
 - Two screens: run history and run details.
 - One application job in flight; other accepted pushes wait in order.
@@ -72,7 +74,7 @@ git commit -m "Run pocket-v1 feature extraction"
 git push -u origin HEAD
 ```
 
-Only committed changes are submitted. The repository quickstart supplies the deployed dashboard URL and operator contact. The run appears on history without a website submission form.
+Only committed changes are submitted. The repository quickstart explains submission; the operator supplies the current temporary dashboard URL. The run appears on history without a website submission form, and its details show the operator contact.
 
 A push creates **one run for its final commit**, even if it contains several commits. Creating a run branch can trigger a run. A force push can create a new run but cannot rewrite old history. Every qualifying push triggers, including documentation-only pushes to a run branch; there is no changed-file filter in v1.
 
@@ -89,7 +91,7 @@ flowchart LR
     R["Researcher pushes run branch"] --> G["GitHub"]
     G -->|Signed webhook| W["Receiver + read-only dashboard"]
     B["Browser"] -->|HTTPS| W
-    subgraph Host["One application host (Render optional)"]
+    subgraph Host["One application host"]
         W <--> D[("Persistent disk: SQLite + sources + results + backups")]
         D <--> P["One supervised worker"]
     end
@@ -100,19 +102,19 @@ flowchart LR
     P -->|Retrieve logs and results| F
 ```
 
-The managed submission design uses one application host outside the cluster: FastAPI, server-rendered HTML, modest JavaScript polling, and a Python worker. The current free test instead starts the web process and observer locally. For an optional paid Render deployment, the prepared Blueprint selects one CPU, 2 GB RAM, and a 10-GB persistent disk; review usage as retained source history grows. Render supplies HTTPS. There is no separate database service or GitHub Pages frontend. The application needs outbound SSH and repository access, but no GPU or PyTorch. No persistent application service runs on the cluster login node.
+Use one application host outside the cluster: FastAPI, server-rendered HTML, modest JavaScript polling, and a Python worker. The free pilot runs these on the laptop; an always-on lab host can run the same application. There is no separate database service or GitHub Pages frontend. The host needs outbound SSH, private repository access, persistent storage, and an HTTPS endpoint, but no GPU or PyTorch. No persistent application service runs on the cluster login node. The [Render guide](docs/render.md) is an optional paid alternative, not a prerequisite.
 
-`dmasif-console serve` supervises the web and worker processes, forwards termination, and exits on unexpected child failure so Render can restart the service. Health includes worker-process liveness; the dashboard separately reports stale cluster monitoring. Both processes use `/var/data/state`; local rotating backups use `/var/data/backups`. Keep exactly one instance. A deployment briefly interrupts the dashboard; submitted cluster jobs continue and monitoring reconciles after restart. The runtime disk is unavailable to Render one-off jobs and pre-deploy commands, so operator recovery uses the live service's Shell. [Render persistent disks](https://render.com/docs/disks)
+`dmasif-console serve` supervises the web and worker processes, forwards termination, and exits on unexpected child failure. A permanent host's process manager should restart the service; the current laptop pilot is restarted manually. Health includes worker-process liveness; the dashboard separately reports stale cluster monitoring. Both processes share one private state directory; backups use a separate private directory. Keep exactly one instance. Application downtime interrupts the dashboard and webhook receiver; submitted cluster jobs continue and monitoring reconciles after restart. Inspect and redeliver failed GitHub deliveries after an outage.
 
 Use SQLite WAL, short transactions, foreign keys, and a busy timeout. Enforce one worker with a process-lifetime OS file lock on the persistent local volume. Run states provide the durable queue. No Redis, distributed queue, lease framework, or separate frontend service is needed. WAL requires a same-host database, not a shared network filesystem. [SQLite WAL](https://www.sqlite.org/wal.html)
 
 Keep allowed repository/actor IDs, dataset manifests, runtime release, resource preset, caps, and operator contact in private operator configuration. Retain its revisions in approved private operator storage and snapshot resolved settings into each run so later configuration edits cannot change accepted work. No registry-management UI is needed.
 
-Use a small separate infrastructure repository for the service; the lab's research fork based on `modern-stack` supplies experiment code. The Render Blueprint selects the infrastructure `main` branch and disables automatic deployments and preview environments. Operators manually deploy reviewed infrastructure revisions. A research push cannot deploy changes to the application's service. Never execute research setup scripts on that host. A deployed adapter controls preparation, scheduler options, invocation, and validation.
+Use a small separate infrastructure repository for the service; the lab's research fork based on `modern-stack` supplies experiment code. The current repositories are [dmasif-console](https://github.com/azhang4216/dmasif-console) and [dmasif-experiments](https://github.com/azhang4216/dmasif-experiments). Operators deploy reviewed infrastructure revisions. A research push cannot deploy changes to the application's service. Never execute research setup scripts on that host. A deployed adapter controls preparation, scheduler options, invocation, and validation.
 
-Render secret files supply the SSH key, verified host entry, private operator configuration, and optional repository-read token. The webhook secret is entered in Render's environment settings; the Blueprint contains no secret values. The image's explicit build-context allowlist excludes secret files, including copies Render adds during builds. Use batch SSH, strict host-key verification, bounded timeouts, and no agent forwarding. Credentials never enter Git, source archives, logs, browser responses, or job directories. [Render secret files](https://render.com/docs/configure-environment-variables#secret-files), [Docker build secrets](https://render.com/docs/docker)
+Protected files outside Git supply the SSH key, verified host entry, private operator configuration, repository-read token, and webhook secret. Load secret values from files or the host's secret manager; never include them in deployment manifests or shell command arguments. The Docker image's explicit build-context allowlist excludes local secrets. Use batch SSH, strict host-key verification, bounded timeouts, and no agent forwarding. Credentials never enter Git, source archives, public logs, browser responses, or job directories.
 
-**The single Render service is one backend trust boundary.** The web and worker share a service and OS user. The key is hidden from browser clients, but is accessible to backend code and trusted Render administrators. A web-process compromise can therefore expose the credential. This consciously replaces R3's separate-container credential boundary in exchange for simpler hosting. The optional Linux Compose deployment retains separate web/worker secret mounts.
+**The single application is one backend trust boundary.** The web and worker share a service and OS user. The key is hidden from browser clients, but is accessible to backend code and trusted host administrators. A web-process compromise can therefore expose the credential. This replaces R3's separate-container credential boundary in exchange for simpler hosting. The optional Linux Compose deployment retains separate web/worker secret mounts.
 
 Serve dashboard pages, run APIs, logs, and result downloads publicly over HTTPS without a viewing login. The lab has chosen public visibility for run metadata and results. Keeping the GitHub repositories private protects source access, not the website; commit links still require GitHub repository access. Saved source archives and private operator state have no public download route. The webhook retains its signature, repository, and approved numeric sender checks. There are no browser write actions.
 
@@ -128,7 +130,7 @@ Ignore non-run branches, tags, and branch deletions, recording reasons for appro
 
 Deduplicate by configured hook identity plus delivery ID, and also by SHA-256 of the exact verified body. Redelivery or byte-identical replay with a changed delivery header maps to the original event/run. Reject a delivery ID reused with different bytes. Distinct qualifying events create distinct runs; do not deduplicate by commit alone. Retain deduplication records with history. Changing `repeat_id` in a new commit is the repeat mechanism. [Webhook best practices](https://docs.github.com/en/webhooks/using-webhooks/best-practices-for-using-webhooks)
 
-GitHub does not automatically redeliver failed webhooks. History includes “Where is my run?” help, received-event activity, and the operator contact. If nothing arrived, say only that; the repository operator checks GitHub delivery history and requests redelivery. [Failed deliveries](https://docs.github.com/en/webhooks/using-webhooks/handling-failed-webhook-deliveries)
+GitHub does not automatically redeliver failed webhooks. The dashboard's **Push activity** shows received events and their decisions; the linked README explains submission. If nothing arrived, say only that; the repository operator checks GitHub delivery history and requests redelivery. [Failed deliveries](https://docs.github.com/en/webhooks/using-webhooks/handling-failed-webhook-deliveries)
 
 ## 5. Small durable data model
 
@@ -153,6 +155,8 @@ Use a safe YAML parser and strict schema. Configuration cannot select arbitrary 
 
 Freeze and test the actually working Apptainer environment; do not assume the SIF matches the mutable sandbox. Record the image/checkpoint hashes, adapter version, and actual GPU/runtime details. Supply an explicit checkpoint rather than relying on the extractor's relative default.
 
+The current cluster lacks `squashfuse`, so the operator enables `runtime_unsquash` for the frozen image. The adapter verifies its hash and extracts into a private temporary directory on node-local storage, with a free-space check before launch. It cleans that directory on normal and handled error exits; forced termination or node failure may require cleanup. This setting belongs to the tested runtime release, not researcher YAML. See [the adapter guide](docs/cluster-adapter.md).
+
 Mount the saved source read-only at a fixed container path; execute its `affinity/extract.py` and pass that snapshot as `--repo`. Set the working directory/import paths, disable Python user-site packages, clean the environment, and prevent inherited `PYTHONPATH` or the old checkout from supplying project modules. Verify and record resolved project-module paths. Test against the installed Apptainer version and site mounts. [Environment](https://apptainer.org/docs/user/latest/environment_and_metadata.html), [bind mounts](https://apptainer.org/docs/user/latest/bind_paths_and_mounts.html)
 
 Experiment code must preserve the supported extractor arguments and result schema. New dependencies, incompatible formats, or training require an operator-tested runtime/adapter release. Pinning records what ran; it does not make incompatible code work automatically.
@@ -163,7 +167,7 @@ The current extractor loads pending inputs into host RAM before GPU batching; `m
 
 ## 7. Preventing overwrites and false success
 
-Proposed layout under `$WORK/job_console`:
+Managed layout under `$WORK/job_console` (release filenames are operator-controlled):
 
 ```text
 releases/
@@ -281,14 +285,14 @@ config/                 # example allowlists, datasets, runtime, preset
 tests/                  # webhook, scheduler, filesystem fixtures
 docs/                   # researcher quickstart and operator runbook
 deploy/                 # shared Docker image; optional Linux Compose setup
-render.yaml             # selected single-service Render deployment
+render.yaml             # optional paid Render deployment
 ```
 
 1. Build receiver, database, two screens, and a fake cluster adapter locally.
 2. Implement snapshotting, unique directories, claims/receipts, validation, and caching against fixtures.
-3. Before launch, create the Render service/URL and choose operator, approved repo/actors, trusted SSH host key, credentials, storage thresholds, and frozen runtime/checkpoint. Confirm delegated submission is permitted for the account and that the cluster permits SSH from Render.
-4. A later authorized deployment installs the service and proposed cluster adapter/root, starting with the demo. This document authorizes no remote writes.
-5. Run an authorized end-to-end demo twice, then submit as two researchers. Verify separate results, attribution, logs, and provenance before expanding scope.
+3. Choose an application host/HTTPS URL, operator, approved repo/actors, trusted SSH host key, credentials, storage thresholds, and frozen runtime/checkpoint. Confirm delegated submission and SSH access from that host are permitted.
+4. Install the managed adapter and immutable assets under a new cluster root. This is installed for the current authorized pilot; a fresh host/cluster still needs its own configuration and verification.
+5. Complete genuine valid- and invalid-config pushes, replay and restart checks, and local/public result verification. Add the remaining researchers' approved IDs and verify their attribution before expanding scope.
 6. Add measured datasets, concurrency, QoS choices, or training when needed.
 
 Acceptance checks:
@@ -303,15 +307,17 @@ Acceptance checks:
 - Application waiting differs from Slurm queuing; stale monitoring and cache failures do not invent scientific failures.
 - Pages, APIs, logs, and validated downloads work without login; public routes cannot submit/cancel or reveal credentials; logs render as text; artifact IDs cannot escape the cache.
 
-Back up SQLite consistently with retained source archives. The Render service schedules a backup every 24 hours and keeps three automatic copies on the persistent disk. Keep configuration, manifests, release hashes, and secrets recoverable separately. An operator exports completed backups to approved private storage; off-service export is not automated in v1. Same-disk backups cannot recover loss of that disk or service.
+Back up SQLite consistently with retained source archives. With `DMASIF_BACKUP_DIR` configured, the service schedules a backup every 24 hours and keeps three automatic copies; this is enabled for the pilot. Keep configuration, manifests, release hashes, and secrets recoverable separately. An operator exports completed backups to approved private storage; off-host export is not automated in v1. Same-disk backups cannot recover loss of that disk or host.
 
-For a restore, deploy with `DMASIF_MAINTENANCE=1` and policy submissions disabled. The supervisor runs only the maintenance web process, rejects viewer/webhook traffic, and leaves the worker stopped. Preserve the old state directory; restore into a fresh directory using Render Shell, reconcile, then leave maintenance with submissions still paused for review. A restored worker reconciles run directories and scheduler evidence before scheduling; restoring a database must not imply a fresh submission. [Render runbook](docs/render.md#backups-and-recovery)
+For a restore, deploy with `DMASIF_MAINTENANCE=1` and policy submissions disabled. The supervisor runs only the maintenance web process, rejects viewer/webhook traffic, and leaves the worker stopped. Preserve the old state directory; restore into a fresh directory, reconcile, then leave maintenance with submissions still paused for review. Stop the old worker before moving to a new host. A restored worker reconciles run directories and scheduler evidence before scheduling; restoring a database must not imply a fresh submission. See [the backup and recovery procedure](docs/deployment.md#backups-restore-and-updates).
 
 Every remote `request.json` retains the hook/delivery identity and verified-body hash. Before resuming after a restore, rebuild and reconcile delivery/body-hash-to-run mappings from remote request/receipt evidence, including runs newer than the backup. Unresolved evidence keeps submissions paused, so redelivery cannot create another run for an already-submitted event.
 
 ## 11. Review decisions and scope control
 
 Reliability, researcher UX, and simplicity reviewers agreed on the core workflow and requested a smaller first release. R3 removed individual web accounts, eleven-table registries, retry-attempt machinery, generic operation queues/leases, artifact-fetch queues, comparison screens, and training controls. R4 selects one Render application and local SQLite in response to the lab's hosting preference, preserving that smaller workflow. R5 simplifies run branch names; R6 removes the viewing password following the lab's decision to make results public, while retaining authenticated submissions and private backend credentials.
+
+R7 introduced free local observation through a public tunnel. R8 documents the installed push-to-run pilot, a separate private research repository, actionable configuration errors, frozen runtime compatibility, and actual replay/restart checks. Permanent hosting and valid GPU result acceptance remain open; a temporary public tunnel is not an always-on deployment.
 
 It keeps safeguards tied to actual or credible failures: GitHub attribution, pinned execution, unique run/job output directories, expected-output validation, replay protection, durable submission evidence, and reconciliation of ambiguous submission.
 
@@ -325,4 +331,4 @@ Three independent specialist agents reviewed the initial design, challenged the 
 | Researcher UI/UX | APPROVE R3 | Copyable quickstart, two screens, curated datasets, clear waiting/error states, live logs, operator recovery |
 | Simplicity and lab fit | APPROVE R3 | Four tables, one worker, configuration-file registries, new runs for repeats, bounded cache, extraction-only MVP |
 
-The recorded consensus approves the R3 design, not a deployed implementation. R4's implementation must verify supervision, restart/reconciliation, backup consistency, maintenance recovery, and secret exclusion. Site-specific launch inputs and an authorized cluster smoke test remain required.
+The recorded consensus approves the R3 design, not a deployed implementation. The R8 pilot has unit/regression coverage plus genuine GitHub delivery, invalid-config rejection, duplicate delivery, restart recovery, backup creation, and public-site checks. GPU execution/result acceptance and permanent hosting still require direct evidence; no design review substitutes for those checks.

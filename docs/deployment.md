@@ -1,6 +1,6 @@
 # Alternative: deploy on a lab-managed Linux host
 
-The current free test uses [the laptop and a temporary tunnel](live-test.md). Use this guide if the lab chooses to maintain its own Linux server; [one Render application](render.md) remains another optional deployment. Compose keeps the web and worker in separate containers; the Render deployment runs both inside one service.
+The current free pilot uses [the laptop and a temporary tunnel](live-submissions.md) for real push-triggered submissions. Use this guide if the lab chooses to maintain its own Linux server; [one Render application](render.md) remains another optional deployment. Compose keeps the web and worker in separate containers; the Render deployment runs both inside one service.
 
 Use one always-on Linux machine with Docker Compose. Caddy provides HTTPS, the web process receives signed pushes and serves the dashboard, and one worker communicates with the scheduler. The application host needs no GPU. SQLite, saved source, and the artifact cache stay on a persistent local Docker volume.
 

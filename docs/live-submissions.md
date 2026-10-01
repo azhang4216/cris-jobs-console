@@ -51,11 +51,19 @@ The detail page retains received/submitted/started/ended times, actual state tra
 
 Download the real NPZ and validate its hash, nonempty point/atom arrays, finite numeric values, 16-dimensional features, and metadata. Verify the same information locally and through the public URL, including mobile layout. Redeliver an accepted webhook and check that it creates neither a second run nor a second scheduler job.
 
+With the project installed in `.venv`, run the saved verifier from this checkout:
+
+```bash
+.venv/bin/python scripts/verify_live_acceptance.py http://127.0.0.1:8002
+```
+
+It defaults to the current pilot's two exact commits, branch names, research repository, and `azhang4216` identity. Use `--help` to override these identities, replace the base URL to verify the public site, or add `--output /tmp/dmasif-acceptance.json` to save its JSON summary. It uses only cached HTTP GET routes and checks real execution evidence plus the downloaded NPZ. Exit `0` means all checks passed, `2` means pending or unavailable, and `1` means verification failed. A queued job must remain pending; it is never counted as a pass.
+
 Each run has a distinct UUID and allocation directory. Retain submission/execution claims and receipts; an uncertain response must be reconciled, never retried blindly. Do not reuse the historical shared output directory.
 
-## Stop accepting new work
+## Pause new cluster submissions
 
-Pause new submissions while continuing to monitor active work:
+Pause cluster scheduling while continuing to monitor active work. Signed pushes are still accepted and their source/configuration is prepared; valid requests wait until scheduling resumes:
 
 ```bash
 .venv/bin/dmasif-console --config .state-managed-live/config.yaml pause \

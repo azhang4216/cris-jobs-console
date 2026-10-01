@@ -1,0 +1,93 @@
+name: dmasif-console
+
+x-application: &application
+  image: ${DMASIF_IMAGE:-dmasif-console:local}
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
+    args:
+      PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.12-slim-bookworm}
+  user: "10001:10001"
+  init: true
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,size=128m,mode=1777
+  volumes:
+    - console_state:/var/lib/dmasif-console
+  stop_grace_period: 45s
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  web:
+    <<: *application
+    command: [web, --host, 0.0.0.0, --port, "8000"]
+    environment:
+      DMASIF_CONFIG: /run/secrets/operator_config
+      DMASIF_STATE_DIR: /var/lib/dmasif-console
+      DMASIF_WEBHOOK_SECRET_FILE: /run/secrets/webhook_secret
+      DMASIF_VIEWER_PASSWORD_FILE: /run/secrets/viewer_password
+    secrets: [operator_config, webhook_secret, viewer_password]
+    expose: ["8000"]
+    healthcheck:
+      test: [CMD, python, -c, "import socket; socket.create_connection(('127.0.0.1', 8000), timeout=3).close()"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  worker:
+    <<: *application
+    command: [worker]
+    environment:
+      DMASIF_CONFIG: /run/secrets/operator_config
+      DMASIF_STATE_DIR: /var/lib/dmasif-console
+      DMASIF_SSH_KEY: /run/secrets/cluster_ssh_key
+      DMASIF_KNOWN_HOSTS: /run/secrets/cluster_known_hosts
+    secrets: [operator_config, cluster_ssh_key, cluster_known_hosts]
+    # One process is enforced by the worker's lifetime lock on console_state.
+    # Do not scale this service or move the SQLite volume onto NFS.
+
+  proxy:
+    image: ${CADDY_IMAGE:-caddy:2-alpine}
+    restart: unless-stopped
+    environment:
+      CONSOLE_DOMAIN: ${CONSOLE_DOMAIN:?Set CONSOLE_DOMAIN in deploy/.env}
+      ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL in deploy/.env}
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      web:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+secrets:
+  operator_config:
+    file: ${OPERATOR_CONFIG_FILE:-./private/operator.yaml}
+  webhook_secret:
+    file: ${WEBHOOK_SECRET_FILE:-./private/webhook-secret}
+  viewer_password:
+    file: ${VIEWER_PASSWORD_FILE:-./private/viewer-password}
+  cluster_ssh_key:
+    file: ${CLUSTER_SSH_KEY_FILE:-./private/cluster-key}
+  cluster_known_hosts:
+    file: ${CLUSTER_KNOWN_HOSTS_FILE:-./private/known-hosts}
+
+volumes:
+  console_state:
+    name: ${DMASIF_STATE_VOLUME:-dmasif_console_state}
+  caddy_data:
+  caddy_config:

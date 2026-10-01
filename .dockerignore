@@ -1,0 +1,9 @@
+*
+!pyproject.toml
+!requirements.lock
+!dmasif_console/
+!dmasif_console/**
+!cluster_adapter/
+!cluster_adapter/**
+**/__pycache__/
+**/*.pyc

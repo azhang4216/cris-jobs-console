@@ -1,0 +1,54 @@
+# Copy into ignored deploy/private/operator.yaml or config/local.yaml.
+# All site-specific values below are examples, never real cluster credentials.
+mode: ssh
+state_dir: /var/lib/dmasif-console
+submissions_enabled: false
+operator_contact: "Your lab operator: operator@example.org"
+poll_seconds: 10
+repository:
+  id: 123456789
+  full_name: YOUR_LAB/dMaSIF
+  clone_url: https://github.com/YOUR_LAB/dMaSIF.git
+allowed_actor_ids: [11111, 22222, 33333, 44444]
+hook_id: dmasif-lab-push
+viewer_username: lab
+# Passwords use DMASIF_VIEWER_PASSWORD_FILE and DMASIF_WEBHOOK_SECRET_FILE.
+datasets:
+  demo-1stp-v1:
+    description: "Registered 1STP extraction smoke test"
+    merge_models: false
+    entries:
+      - path: /srv/lab/inputs/1STP.pdb
+        sha256: REPLACE_WITH_INPUT_SHA256
+        chains: null
+presets:
+  quick-test:
+    gpus: 1
+    cpus: 8
+    memory_gb: 64
+    wall_minutes: 15
+    qos: test
+    max_atoms: 150000
+    max_proteins: 16
+cluster:
+  host: login.example.invalid
+  user: service-user
+  root: /srv/lab/job_console
+  helper_path: /srv/lab/job_console/releases/adapters/v1/helper.py
+  account: lab-account
+  partition: gpu
+  qos: test
+  runtime_image: /srv/lab/job_console/releases/containers/APPROVED.sif
+  runtime_sha256: REPLACE_WITH_RUNTIME_SHA256
+  checkpoint_path: /srv/lab/checkpoints/APPROVED
+  checkpoint_sha256: REPLACE_WITH_CHECKPOINT_SHA256
+  adapter_version: v1
+# SSH key and verified known_hosts use DMASIF_SSH_KEY / DMASIF_KNOWN_HOSTS.
+queue_limit: 100
+max_source_bytes: 52428800
+max_input_bytes: 52428800
+max_artifact_bytes: 10485760
+max_run_artifact_bytes: 52428800
+max_cache_bytes: 1073741824
+min_free_bytes: 268435456
+log_tail_bytes: 65536

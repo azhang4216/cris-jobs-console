@@ -1,0 +1,7 @@
+# Commit this as experiments/run.yaml in the research repository.
+schema_version: 1
+job_type: dmasif_extract
+dataset_id: demo-1stp-v1
+preset_id: quick-test
+seed: 0
+repeat_id: first-run

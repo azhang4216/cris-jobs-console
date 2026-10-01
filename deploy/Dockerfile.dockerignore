@@ -1,0 +1,14 @@
+# This allowlist applies even when the build context is the repository root.
+# Dockerfile-specific ignore rules take precedence over a root .dockerignore.
+**
+!pyproject.toml
+!requirements.lock
+!dmasif_console/
+!dmasif_console/**
+!cluster_adapter/
+!cluster_adapter/**
+!deploy/
+!deploy/git-askpass.py
+**/__pycache__/
+**/*.pyc
+**/.DS_Store

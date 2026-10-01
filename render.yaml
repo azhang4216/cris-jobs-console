@@ -1,0 +1,42 @@
+# One paid application, one disk. No separate database or worker service.
+# Add the private files named below in Render > Environment > Secret Files.
+# Never paste their contents into this file or commit operator.yaml.
+services:
+  - type: web
+    name: dmasif-console
+    runtime: docker
+    plan: 1c-2g
+    region: virginia
+    branch: main
+    dockerfilePath: ./deploy/Dockerfile
+    dockerContext: .
+    # Dockerfile's default starts the supervised web + worker command.
+    autoDeployTrigger: "off"
+    numInstances: 1
+    healthCheckPath: /healthz
+    maxShutdownDelaySeconds: 60
+    disk:
+      name: console-data
+      mountPath: /var/data
+      sizeGB: 10
+    envVars:
+      - key: PORT
+        value: "10000"
+      - key: DMASIF_CONFIG
+        value: /etc/secrets/operator.yaml
+      - key: DMASIF_STATE_DIR
+        value: /var/data/state
+      - key: DMASIF_SSH_KEY
+        value: /etc/secrets/cluster-key
+      - key: DMASIF_KNOWN_HOSTS
+        value: /etc/secrets/known-hosts
+      - key: DMASIF_BACKUP_DIR
+        value: /var/data/backups
+      - key: DMASIF_BACKUP_INTERVAL_SECONDS
+        value: "86400"
+      - key: DMASIF_BACKUP_KEEP
+        value: "3"
+      - key: DMASIF_WEBHOOK_SECRET
+        sync: false
+      - key: DMASIF_VIEWER_PASSWORD
+        sync: false

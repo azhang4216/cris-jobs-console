@@ -1,0 +1,14 @@
+# Optional worker-only credential for a private research repository.
+# Merge after compose.yaml with a second -f argument; do not put the token in a URL.
+services:
+  worker:
+    environment:
+      GIT_ASKPASS: /usr/local/bin/dmasif-git-askpass
+      GIT_TERMINAL_PROMPT: "0"
+      DMASIF_REPOSITORY_TOKEN_FILE: /run/secrets/repository_token
+    secrets:
+      - repository_token
+
+secrets:
+  repository_token:
+    file: ${REPOSITORY_TOKEN_FILE:-./private/repository-token}

@@ -1,0 +1,19 @@
+{
+    email {$ACME_EMAIL}
+    admin off
+}
+
+{$CONSOLE_DOMAIN} {
+    encode zstd gzip
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy same-origin
+        X-Frame-Options DENY
+        Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+        Strict-Transport-Security "max-age=31536000"
+        -Server
+    }
+    # The application authenticates viewer routes and verifies webhook HMACs.
+    # Never add a shared viewer-password requirement to the webhook route.
+    reverse_proxy web:8000
+}

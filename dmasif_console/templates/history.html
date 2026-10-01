@@ -2,41 +2,45 @@
 {% from 'macros.html' import run_row, timestamp %}
 {% block content %}
 <section class="page-heading">
-  <div><p class="eyebrow">Research workspace</p><h1>Experiment history<span class="heading-period">.</span></h1><p class="page-description">Push your code. Follow the run. Keep every result.</p></div>
-  <a class="quiet-button" href="#how-to-run">How to run <span aria-hidden="true">↓</span></a>
+  <div>
+    <div class="section-title"><h1>Runs</h1><span id="visible-count" class="count-badge">{{ runs|length }}</span></div>
+    <p class="page-description">Track jobs and results.</p>
+  </div>
+  {% if (settings.get('instructions_url') or '').startswith('https://') %}
+  <a class="primary-button" href="{{ settings.get('instructions_url') }}" target="_blank" rel="noopener noreferrer" title="Open job-submission instructions in the README">How to run an experiment <span aria-hidden="true">↗</span></a>
+  {% endif %}
 </section>
 {% set submission_control = control|default({}) %}
-<div class="run-notice" id="submission-notice" {% if not submission_control.get('paused') %}hidden{% endif %}><strong>New submissions paused; existing jobs continue to be monitored.</strong><p id="submission-pause-reason" {% if not submission_control.get('reason') %}hidden{% endif %}>{{ submission_control.get('reason') or '' }}</p></div>
-<section class="stats-grid" aria-label="Run summary">
-  <div class="stat"><span class="stat-label">All runs</span><strong data-stat="total">{{ stats.get('total', 0) }}</strong><span class="stat-note">Recorded experiments</span></div>
-  <div class="stat"><span class="stat-label"><i class="mini-dot teal" aria-hidden="true"></i>In progress</span><strong data-stat="active">{{ stats.get('active', 0) }}</strong><span class="stat-note">Waiting, queued, or running</span></div>
-  <div class="stat"><span class="stat-label"><i class="mini-dot green" aria-hidden="true"></i>Succeeded</span><strong data-stat="succeeded">{{ stats.get('succeeded', 0) }}</strong><span class="stat-note">Outputs validated</span></div>
-  <div class="stat"><span class="stat-label"><i class="mini-dot amber" aria-hidden="true"></i>Needs attention</span><strong data-stat="attention">{{ stats.get('attention', 0) }}</strong><span class="stat-note">Review the run details</span></div>
-</section>
-<section class="panel history-panel" aria-labelledby="history-title">
-  <div class="panel-heading"><div class="section-title"><h2 id="history-title">Runs</h2><span id="visible-count" class="count-badge">{{ runs|length }}</span></div><span class="live-indicator"><span aria-hidden="true"></span>Live updates</span></div>
+<div class="run-notice" id="submission-notice" {% if not submission_control.get('paused') %}hidden{% endif %}>
+  <strong>New submissions paused.</strong>
+  <p id="submission-pause-reason" {% if not submission_control.get('reason') %}hidden{% endif %}>{{ submission_control.get('reason') or '' }}</p>
+</div>
+<section class="panel history-panel" aria-label="Runs">
   <form class="filter-bar" method="get" action="/" id="run-filters" aria-label="Filter runs">
-    <label class="search-field"><span class="sr-only">Search experiment</span><svg width="17" height="17" viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" stroke-width="1.5"/><path d="m13 13 4 4" stroke="currentColor" stroke-width="1.5"/></svg><input type="search" name="experiment" placeholder="Search experiment…" value="{{ filters.get('experiment', '') }}" autocomplete="off"></label>
-    <label><span class="sr-only">Researcher</span><select name="actor" id="actor-filter"><option value="">All researchers</option>{% set actors = runs|selectattr('actor_login')|map(attribute='actor_login')|unique|sort %}{% for actor in actors %}<option value="{{ actor }}" {% if filters.get('actor') == actor %}selected{% endif %}>{{ actor }}</option>{% endfor %}{% if filters.get('actor') and filters.get('actor') not in actors %}<option value="{{ filters.get('actor') }}" selected>{{ filters.get('actor') }}</option>{% endif %}</select></label>
+    <label class="search-field"><span class="sr-only">Search experiment</span><svg width="17" height="17" viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" stroke-width="1.5"/><path d="m13 13 4 4" stroke="currentColor" stroke-width="1.5"/></svg><input type="search" name="experiment" placeholder="Search experiments" value="{{ filters.get('experiment', '') }}" autocomplete="off"></label>
+    <label><span class="sr-only">Researcher</span><select name="actor" id="actor-filter"><option value="">All researchers</option>{% set available_actors = actors|default(runs|selectattr('actor_login')|map(attribute='actor_login')|unique|sort) %}{% for actor in available_actors %}<option value="{{ actor }}" {% if filters.get('actor') == actor %}selected{% endif %}>{{ actor }}</option>{% endfor %}{% if filters.get('actor') and filters.get('actor') not in available_actors %}<option value="{{ filters.get('actor') }}" selected>{{ filters.get('actor') }}</option>{% endif %}</select></label>
     <label><span class="sr-only">Run status</span><select name="status"><option value="">All statuses</option>{% for state, label in status_labels.items() %}<option value="{{ state }}" {% if filters.get('status') == state %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
-    <button class="text-button" type="reset">Clear filters</button><noscript><button class="quiet-button" type="submit">Apply</button></noscript>
+    <button class="text-button" type="reset">Clear</button><noscript><button class="quiet-button" type="submit">Apply</button></noscript>
   </form>
   <div class="table-scroll" tabindex="0" role="region" aria-label="Experiment runs">
-    <table class="runs-table"><thead><tr><th scope="col">Researcher / experiment</th><th scope="col">Commit</th><th scope="col">Dataset</th><th scope="col">Status</th><th scope="col">Received</th><th scope="col">Runtime</th></tr></thead><tbody id="runs-body">{% for run in runs %}{{ run_row(run, status_labels) }}{% endfor %}</tbody></table>
+    <table class="runs-table">
+      <thead><tr><th scope="col">Experiment</th><th scope="col">Researcher</th><th scope="col">Commit</th><th scope="col">Dataset</th><th scope="col">Status</th><th scope="col">Received</th><th scope="col">Runtime</th></tr></thead>
+      <tbody id="runs-body">{% for run in runs %}{{ run_row(run, status_labels) }}{% endfor %}</tbody>
+    </table>
   </div>
-  <div class="empty-state" id="empty-runs" {% if runs %}hidden{% endif %}><div class="empty-icon" aria-hidden="true">⌁</div><h3 id="empty-title">Your first experiment starts with a push.</h3><p id="empty-description">Push an experiment branch to the approved research repository. Its run will appear here.</p><a href="#how-to-run" class="text-link">See the quickstart <span aria-hidden="true">↓</span></a></div>
-  <div class="table-footer"><span>One application job in flight at a time.</span><span>Showing up to 200 matching runs; use filters to find older experiments.</span></div>
+  {% set has_filters = filters.get('experiment') or filters.get('actor') or filters.get('status') %}
+  <div class="empty-state" id="empty-runs" {% if runs %}hidden{% endif %}>
+    <h2 id="empty-title">{{ 'No matching runs' if has_filters else 'No runs yet' }}</h2>
+    <p id="empty-description">{{ 'Try different filters.' if has_filters else 'Your experiments will appear here.' }}</p>
+  </div>
+  <div class="table-footer"><span>Up to 200 matches · filter to find older runs</span></div>
 </section>
-<div class="support-grid">
-  <section class="panel quickstart-panel" id="how-to-run" aria-labelledby="quickstart-title"><div class="panel-heading"><div><p class="eyebrow">Start an experiment</p><h2 id="quickstart-title">From your repository to the GPU.</h2></div><span class="step-number" aria-hidden="true">01—03</span></div><div class="panel-content"><ol class="quickstart-steps"><li><strong>Add the run configuration</strong><p>Save this as <code>experiments/run.yaml</code> in the approved research repository.</p><pre class="code-block"><code>schema_version: 1
-job_type: dmasif_extract
-dataset_id: demo-1stp-v1
-preset_id: quick-test
-seed: 0
-repeat_id: first-run</code></pre></li><li><strong>Commit and push a run branch</strong><p>Choose an experiment name and use your personal GitHub account. We record who pushed automatically.</p><pre class="code-block"><code>git switch -c runs/pocket-v1
-git add experiments/run.yaml affinity/extract.py
-git commit -m "Run pocket-v1 feature extraction"
-git push -u origin HEAD</code></pre></li><li><strong>Follow the run here</strong><p>One push runs its final commit. To repeat, change <code>repeat_id</code>, commit, and push again. Every push to a run branch can start work.</p></li></ol><p class="small-note">Branch names are shared. Use different experiment names for independent work; every run gets separate outputs.</p><p class="small-note">This release extracts features. Training and custom dataset uploads are not enabled.</p>{% if (settings.get('repository_url') or '').startswith('https://') %}<a href="{{ settings.get('repository_url') }}" class="text-link" target="_blank" rel="noopener noreferrer">Open research repository <span aria-hidden="true">↗</span></a>{% endif %}</div></section>
-  <div class="support-stack"><section class="panel" aria-labelledby="activity-title"><div class="panel-heading"><h2 id="activity-title">Recent push activity</h2><span class="subtle-label">Received events</span></div><ul class="activity-list" id="activity-list">{% for event in activity %}<li><div class="activity-top"><strong>{{ event.get('actor_login') or event.get('actor') or 'Repository event' }}</strong><span class="activity-decision">{{ (event.get('decision') or event.get('status') or 'received')|replace('_', ' ')|lower }}</span></div><p>{{ event.get('reason') or event.get('ref') or 'Push received' }}</p><div class="activity-bottom">{{ timestamp(event.get('received_at') or event.get('created_at')) }}{% if event.get('run_id') %}<a href="/runs/{{ event.get('run_id') }}">View run →</a>{% endif %}</div></li>{% else %}<li class="activity-empty">No push events received yet.</li>{% endfor %}</ul></section><section class="help-card" aria-labelledby="missing-title"><span class="help-icon" aria-hidden="true">?</span><div><h2 id="missing-title">Where is my run?</h2><p>Check that your branch is <code>runs/experiment-name</code>, then review the activity above for a rejection or ignored push.</p><p>If no event appears, contact <strong>{{ settings.get('operator_contact', 'the lab operator') }}</strong> to check GitHub delivery history. A missing event does not mean your job failed.</p><p class="small-note">To cancel or resolve an uncertain run, contact the same operator.</p></div></section></div>
-</div>
+<details class="activity-disclosure">
+  <summary>Push activity</summary>
+  <ul class="activity-list" id="activity-list">
+    {% for event in activity %}
+    <li><div class="activity-top"><strong>{{ event.get('actor_login') or event.get('actor') or 'Repository event' }}</strong><span class="activity-decision">{{ (event.get('decision') or event.get('status') or 'received')|replace('_', ' ')|lower }}</span></div><p>{{ event.get('reason') or event.get('ref') or 'Push received' }}</p><div class="activity-bottom">{{ timestamp(event.get('received_at') or event.get('created_at')) }}{% if event.get('run_id') %}<a href="/runs/{{ event.get('run_id') }}">View run →</a>{% endif %}</div></li>
+    {% else %}<li class="activity-empty">No pushes yet.</li>{% endfor %}
+  </ul>
+</details>
 {% endblock %}

@@ -31,6 +31,17 @@ The demo needs the development dependencies because it exercises the real ASGI r
 
 In the **research repository**, copy [config/run.example.yaml](config/run.example.yaml) to `experiments/run.yaml`, commit the desired code, and push a branch named `runs/experiment-name`, for example `runs/pocket-v1`. Your username is not required in the branch name.
 
+From your research checkout, after saving the run configuration:
+
+```bash
+git switch -c runs/pocket-v1
+git add experiments/run.yaml affinity/extract.py
+git commit -m "Run pocket-v1 feature extraction"
+git push -u origin HEAD
+```
+
+Open the dashboard to track the run, then select it for logs and downloads. The dashboard's **How to run an experiment** link returns to this section. The local demo uses simulated pushes; real submissions require the operator to configure the research repository and enable jobs.
+
 - Each qualifying push creates one run for the final full commit SHA.
 - The signed GitHub webhook identifies the researcher who pushed by account login and numeric ID; commit authorship is recorded separately.
 - A repeated webhook returns the existing run. A new configuration commit changing `repeat_id` creates a separate run.

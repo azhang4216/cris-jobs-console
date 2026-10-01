@@ -4,25 +4,21 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light">
-    <title>{% block title %}Experiment history{% endblock %} · Surface Lab</title>
+    <title>{% block title %}Runs{% endblock %}</title>
     <link rel="stylesheet" href="/static/console.css">
     <script src="/static/console.js" defer></script>
   </head>
-  <body data-page="{% block page %}history{% endblock %}" data-poll-seconds="{{ settings.get('poll_seconds', 8) }}" data-api-base-url="{{ settings.get('api_base_url', '') }}" data-operator-contact="{{ settings.get('operator_contact', 'the lab operator') }}">
+  <body data-page="{% block page %}history{% endblock %}" data-poll-seconds="{{ settings.get('poll_seconds', 8) }}" data-api-base-url="{{ settings.get('api_base_url', '') }}">
     <a class="skip-link" href="#main">Skip to content</a>
-    <header class="site-header">
-      <div class="header-inner">
-        <a href="/" class="brand" aria-label="Surface Lab home">
-          <svg class="brand-mark" width="30" height="30" viewBox="0 0 30 30" fill="none" aria-hidden="true"><path d="m5 9 10-6 10 6v12l-10 6-10-6V9Z" stroke="currentColor" stroke-width="1.5"/><path d="m5 9 10 6 10-6M15 15v12M10 6l10 18M20 6 10 24" stroke="currentColor" stroke-width="1.2"/><circle cx="15" cy="15" r="3" fill="currentColor"/></svg>
-          <span>Surface Lab<span class="brand-subtitle">dMaSIF research console</span></span>
-        </a>
-        <nav aria-label="Main navigation"><a href="/" class="nav-link" {% if self.page() == 'history' %}aria-current="page"{% endif %}>Run history</a><span class="view-only">Read-only dashboard</span></nav>
-      </div>
-    </header>
-    {% if settings.get('mode') in ['fake', 'demo', 'local'] %}
-    <div class="demo-banner"><span class="demo-tag">Local demo</span> Simulated jobs and results. No cluster jobs are submitted.</div>
-    {% endif %}
-    <main id="main" class="main-shell">{% block content %}{% endblock %}</main>
-    <footer class="site-footer"><span>Feature extraction · dMaSIF</span><span>Times shown in <strong data-timezone>UTC</strong>. <span id="connection-state" role="status">Updates automatically</span></span></footer>
+    <main id="main" class="main-shell">
+      {% if settings.get('mode') in ['fake', 'demo', 'local'] %}
+      <div class="demo-banner">Demo · simulated data</div>
+      {% endif %}
+      {% block content %}{% endblock %}
+    </main>
+    <footer class="site-footer">
+      <span id="connection-state" role="status">Updates automatically</span>
+      <span>Times in <strong data-timezone>UTC</strong></span>
+    </footer>
   </body>
 </html>

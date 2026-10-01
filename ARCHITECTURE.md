@@ -239,9 +239,9 @@ Do not delete claims or retry uncertain submissions. A resolved failure is repea
 
 ## 9. Dashboard and result delivery
 
-History has six primary columns: **researcher / experiment, commit, dataset, status, received time, runtime**. Filter by researcher, status, and experiment. Link commits to GitHub and runs to details.
+The unbranded overview starts with a run table and a link to the `dmasif-console` README's **Researcher workflow** section for submission instructions. Keep tutorials out of the dashboard. History has seven columns: **experiment, researcher, commit, dataset, status, received time, runtime**. Filter by researcher, status, and experiment. Link commits to GitHub and runs to details.
 
-Details show full branch/SHA, author versus triggering actor, configuration, input/runtime identities, Slurm IDs, received/submitted/started/ended times, exit code, expected/valid counts, logs, and downloads. Store UTC and display the viewer's timezone explicitly. Commit dates are not job dates. Runtime is blank until the job starts, elapsed while running, and end minus start after completion.
+Details prioritize results, logs, timings, and concise run metadata. Configuration, provenance, validation, scheduler IDs, and activity remain available in collapsed sections. Show actionable failures and monitoring issues without routine success banners. Store UTC and display the viewer's timezone explicitly. Commit dates are not job dates. Runtime is blank until the job starts, elapsed while running, and end minus start after completion.
 
 | Display | Meaning and next action |
 | --- | --- |
@@ -256,7 +256,7 @@ Details show full branch/SHA, author versus triggering actor, configuration, inp
 
 Show last successful status-check time and stale status when SSH is unavailable. Preserve the last known scheduler state; monitoring failure does not mean experiment failure. Avoid invented completion percentages.
 
-The history activity/help panel explains ignored/rejected approved-repository events and missing runs. Do not create user-visible rows for arbitrary unverified internet requests.
+The collapsed **Push activity** section retains ignored/rejected approved-repository events for diagnosing missing runs. Do not create user-visible rows for arbitrary unverified internet requests.
 
 Poll bounded log tails while jobs run; fetch small validated results automatically after completion. Initial configurable cache caps: propose 10 MiB per result file, 50 MiB per run, 1 GiB total, to verify against the demo. Serve local cached downloads by fixed IDs, safe filenames, and escaped text; expose no filesystem-path API.
 

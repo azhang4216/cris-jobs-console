@@ -152,19 +152,15 @@
     row.dataset.experiment = run.experiment || "";
     const identity = node("td");
     const link = runLink(run.id, "experiment-link", run.experiment || "Untitled experiment");
-    const arrow = node("span", "row-arrow", "↗");
-    arrow.setAttribute("aria-hidden", "true");
-    link.append(arrow);
-    const byline = node("span", "cell-secondary", run.actor_login || "Unknown researcher");
-    byline.append(node("span", "cell-divider", " / "), node("span", "mono", run.display_id || String(run.id || "").slice(0, 8)));
-    identity.append(link, byline);
+    link.title = `Run ${run.id || ""}`;
+    identity.append(link);
+    const researcher = node("td", "", run.actor_login || "Unknown researcher");
     const commit = node("td"); commit.append(commitNode(run));
-    const dataset = node("td"); dataset.append(node("span", "dataset-name", run.dataset_id || "Checking request"));
+    const dataset = node("td"); dataset.append(node("span", "dataset-name", run.dataset_id || "—"));
     const state = node("td"); state.append(statusNode(run.state));
-    if (run.reason) { const reason = node("span", "status-reason", run.reason); reason.title = run.reason; state.append(reason); }
     const received = node("td", "nowrap time-cell"); received.append(timeNode(run.created_at));
     const runtime = node("td", "mono runtime-cell"); runtime.dataset.runtime = ""; updateRuntime(runtime, run);
-    row.append(identity, commit, dataset, state, received, runtime);
+    row.append(identity, researcher, commit, dataset, state, received, runtime);
     return row;
   }
 
@@ -189,9 +185,8 @@
     const empty = document.getElementById("empty-runs");
     empty.hidden = count !== 0;
     const hasFilters = Object.values(current).some(Boolean);
-    document.getElementById("empty-title").textContent = hasFilters ? "No runs match these filters." : "Your first experiment starts with a push.";
-    document.getElementById("empty-description").textContent = hasFilters ? "Try another researcher, status, or experiment name, or clear the filters." : "Push an experiment branch to the approved research repository. Its run will appear here.";
-    empty.querySelector("a").hidden = hasFilters;
+    document.getElementById("empty-title").textContent = hasFilters ? "No matching runs" : "No runs yet";
+    document.getElementById("empty-description").textContent = hasFilters ? "Try different filters." : "Your experiments will appear here.";
     const nextURL = new URL(location.href);
     for (const key of ["actor", "status", "experiment"]) {
       if (current[key]) nextURL.searchParams.set(key, current[key]);
@@ -228,7 +223,7 @@
       item.append(top, node("p", "", event.reason || event.ref || "Push received"), bottom);
       return item;
     });
-    if (!items.length) items.push(node("li", "activity-empty", "No push events received yet."));
+    if (!items.length) items.push(node("li", "activity-empty", "No pushes yet."));
     replacePreservingFocus(document.getElementById("activity-list"), items);
   }
 
@@ -248,9 +243,6 @@
       replacePreservingFocus(document.getElementById("runs-body"), latestRuns.map(rowNode));
       applyFilters();
     }
-    document.querySelectorAll("[data-stat]").forEach((element) => {
-      element.textContent = String(data.stats?.[element.dataset.stat] ?? 0);
-    });
     renderActivity(Array.isArray(data.activity) ? data.activity : []);
   }
 
@@ -281,7 +273,7 @@
     });
     if (!elements.length) {
       const empty = node("div", "results-empty");
-      empty.append(node("span", "small-symbol", "⌁"), node("p", "", "Validated results will appear here after extraction."), node("span", "small-note", "Missing or incomplete output is never counted as a successful run."));
+      empty.append(node("p", "", "No results yet."));
       elements.push(empty);
     }
     replacePreservingFocus(document.getElementById("artifacts-list"), elements);
@@ -296,7 +288,7 @@
       item.append(node("strong", "mono", job.job_id || job.slurm_job_id || "Pending"), node("span", "", job.state || job.raw_state || "Unknown"), node("p", "small-note", `Exit code: ${job.exit_code || "Not available"}`));
       return item;
     });
-    if (!elements.length) elements.push(node("p", "small-note jobs-empty", "No scheduler job assigned yet."));
+    if (!elements.length) elements.push(node("p", "small-note jobs-empty", "No cluster job yet."));
     document.getElementById("scheduler-jobs").replaceChildren(...elements);
   }
 
@@ -313,7 +305,7 @@
       item.append(marker, content);
       return item;
     });
-    if (!elements.length) elements.push(node("li", "activity-empty", "Run received. Further updates will appear here."));
+    if (!elements.length) elements.push(node("li", "activity-empty", "No updates yet."));
     document.getElementById("events-list").replaceChildren(...elements);
   }
 
@@ -326,7 +318,7 @@
     if (output.textContent !== next) output.textContent = next;
     output.scrollTop = following ? output.scrollHeight : scrollTop;
     output.scrollLeft = scrollLeft;
-    document.getElementById("log-observed").replaceChildren(document.createTextNode("Last check: "), timeNode(observedAt, "Waiting for worker"));
+    document.getElementById("log-observed").replaceChildren(document.createTextNode("Updated "), timeNode(observedAt));
   }
 
   function renderDetail(data) {
@@ -336,18 +328,17 @@
     document.getElementById("detail-status").replaceChildren(statusNode(run.state));
     const needsHelp = attentionStates.has(run.state);
     const notice = document.getElementById("run-notice");
-    notice.hidden = !run.reason && !needsHelp;
-    document.getElementById("notice-label").textContent = needsHelp ? "Review this run" : "Run update";
-    document.getElementById("run-reason").textContent = run.reason || "Open the saved evidence below or contact the operator for help.";
+    notice.hidden = !needsHelp && !run.monitor_error;
+    document.getElementById("notice-label").textContent = needsHelp ? "Needs attention" : "Monitoring issue";
+    document.getElementById("run-reason").textContent = (needsHelp ? run.reason : run.monitor_error) || "Contact the operator for help.";
     document.getElementById("operator-help").hidden = !needsHelp;
     document.getElementById("capacity-note").hidden = !run.capacity_reserved;
     document.querySelectorAll("[data-timing]").forEach((element) => {
-      const fallback = { submitted_at: "Not yet submitted", started_at: "Not yet started", ended_at: "Not yet ended" }[element.dataset.timing] || "—";
-      element.replaceChildren(timeNode(run[element.dataset.timing], fallback));
+      element.replaceChildren(timeNode(run[element.dataset.timing]));
     });
     document.querySelectorAll("[data-runtime]").forEach((element) => updateRuntime(element, run));
-    document.getElementById("last-observed").replaceChildren(timeNode(run.last_observed_at, "Not observed yet"));
-    document.getElementById("detail-dataset").textContent = run.dataset_id || "Checking request";
+    document.getElementById("last-observed").replaceChildren(timeNode(run.last_observed_at));
+    document.getElementById("detail-dataset").textContent = run.dataset_id || "—";
     for (const key of ["validation", "config", "provenance"]) {
       document.getElementById(`${key}-json`).textContent = JSON.stringify(key === "provenance" ? publicProvenance(run[key]) : (run[key] || {}), null, 2);
     }
@@ -360,7 +351,7 @@
     const shouldBeObserved = ["QUEUED", "RUNNING", "SUBMITTING", "SUBMISSION_UNKNOWN", "VALIDATING_RESULTS"].includes(run.state);
     const stale = shouldBeObserved && (!observed || Date.now() - observed.getTime() > Math.max(120000, pollMilliseconds * 4));
     document.getElementById("last-observed").classList.toggle("connection-stale", stale);
-    if (stale) document.getElementById("last-observed").append(node("span", "cell-secondary", "Observation is stale. Last known state is preserved."));
+    if (stale) document.getElementById("last-observed").append(node("span", "cell-secondary", "Update delayed"));
   }
 
   async function getJSON(path) {
@@ -394,7 +385,7 @@
       connection.classList.remove("connection-stale");
       connection.title = `Last dashboard refresh: ${fullDateFormatter.format(new Date())}`;
     } catch (error) {
-      connection.textContent = "Updates paused — retrying; showing saved information";
+      connection.textContent = "Updates delayed · retrying";
       connection.classList.add("connection-stale");
       connection.title = error.message;
     } finally {

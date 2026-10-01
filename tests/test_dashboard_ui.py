@@ -20,17 +20,17 @@ def common():
             "operator_contact": "the lab operator",
             "poll_seconds": 8,
             "repository_url": "https://github.com/example/research",
+            "instructions_url": "https://github.com/azhang4216/dmasif-console#researcher-workflow",
         },
         "status_labels": {"CHECKING_REQUEST": "Checking request", "SUCCEEDED": "Succeeded"},
     }
 
 
-def test_empty_history_teaches_submission_without_browser_write_controls(templates, common):
+def test_empty_history_links_to_repository_instructions_without_browser_write_controls(templates, common):
     page = templates.get_template("history.html").render(**common, runs=[], activity=[], stats={}, filters={})
-    assert "No cluster jobs are submitted" in page
-    assert "experiments/run.yaml" in page
-    assert "runs/pocket-v1" in page
-    assert "Where is my run?" in page
+    assert "Demo · simulated data" in page
+    assert 'href="https://github.com/azhang4216/dmasif-console#researcher-workflow"' in page
+    assert "How to run an experiment" in page
     assert 'method="post"' not in page.lower()
     assert 'type="file"' not in page.lower()
 
@@ -72,7 +72,7 @@ def test_new_run_with_unknown_fields_renders_and_does_not_leak_private_provenanc
         },
     }
     page = templates.get_template("detail.html").render(**common, run=run, jobs=[], events=[])
-    assert "Not yet submitted" in page
+    assert 'data-timing="submitted_at"><span class="muted">—</span>' in page
     assert "saved-source-hash" in page
     assert "saved-runtime-hash" in page
     for runtime_version in ("3.12.10", "2.6.0", "12.4"):
@@ -96,6 +96,6 @@ def test_history_pause_is_visible_and_escapes_operator_reason(templates, common)
         control={"paused": True, "reason": "Inspecting <script>unsafe()</script>"},
     )
     assert 'id="submission-notice" hidden' not in page
-    assert "New submissions paused; existing jobs continue to be monitored." in page
+    assert "New submissions paused." in page
     assert "Inspecting &lt;script&gt;unsafe()&lt;/script&gt;" in page
-    assert "Showing up to 200 matching runs" in page
+    assert "Up to 200 matches" in page

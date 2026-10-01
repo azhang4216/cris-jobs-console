@@ -132,7 +132,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     templates = Jinja2Templates(directory=directory / "templates")
     app.mount("/static", StaticFiles(directory=directory / "static"), name="static")
     public_settings = {"mode": settings.mode, "operator_contact": settings.operator_contact,
-                       "poll_seconds": settings.poll_seconds, "repository_url": settings.repository.url}
+                       "poll_seconds": settings.poll_seconds, "repository_url": settings.repository.url,
+                       "instructions_url": "https://github.com/azhang4216/dmasif-console#researcher-workflow"}
 
     @app.middleware("http")
     async def maintenance_and_headers(request: Request, call_next):

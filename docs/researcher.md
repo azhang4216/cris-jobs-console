@@ -68,7 +68,7 @@ The log panel shows recent output. Scroll upward to stop following; check **Foll
 
 ## Missing runs, cancellations, and help
 
-Check the `runs/experiment-name` branch convention and **Recent push activity** first. A non-run branch is ignored; an unapproved GitHub account is rejected. If no event appears, contact the operator shown on the dashboard to check GitHub delivery history. A missing event does not prove that the push failed or that a job is running.
+Check the `runs/experiment-name` branch convention and expand **Push activity** below the run table. A non-run branch is ignored; an unapproved GitHub account is rejected. If no event appears, contact your lab operator to check GitHub delivery history. A missing event does not prove that the push failed or that a job is running.
 
 For cancellation, send the operator the run URL/UUID. You never need to obtain cluster credentials. Do not create repeated pushes to fix an uncertain submission; the operator must determine whether the original job already exists.
 

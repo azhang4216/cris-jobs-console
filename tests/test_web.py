@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -291,7 +292,8 @@ def test_terminal_unknown_end_time_does_not_invent_runtime(client, settings):
 def test_detail_retains_observed_state_transitions_and_queue_reason(client, settings):
     run_id = signed(client, settings).json()["run_id"]
     store = Store(settings.database_path)
-    store.update_run(run_id, {"state": "QUEUED", "reason": "Waiting for an available GPU."})
+    store.update_run(run_id, {"state": "QUEUED", "reason": "Waiting for an available GPU.",
+                              "last_checked_at": datetime.now(timezone.utc).isoformat()})
     queued = client.get("/runs/" + run_id).text
     assert 'id="status-explanation" >Waiting for an available GPU.' in queued
     store.update_run(run_id, {"state": "RUNNING", "reason": "Running on the cluster."})
@@ -336,3 +338,77 @@ def test_result_dimensions_are_visible_without_private_manifest_paths(client, se
     page = client.get("/runs/" + run_id).text
     assert "6543 surface points · 1234 atoms" in page
     assert "private-manifest-path" not in page
+
+
+@pytest.fixture
+def fixed_web_clock(monkeypatch):
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 10, 1, 17, 30, tzinfo=timezone.utc)
+
+    monkeypatch.setattr("dmasif_console.web.datetime", Clock)
+
+
+@pytest.mark.parametrize(("observed", "error", "seconds"), [
+    ("2026-10-01T08:19:00+00:00", None, 240),
+    ("2026-10-01T17:29:30+00:00", "Scheduler returned no conclusive evidence.", 33270),
+])
+def test_stale_or_failed_monitoring_freezes_running_time_without_changing_state(
+    client, settings, fixed_web_clock, observed, error, seconds,
+):
+    run_id = signed(client, settings).json()["run_id"]
+    store = Store(settings.database_path)
+    store.update_run(run_id, {"state": "RUNNING", "reason": "Running on the cluster.",
+                              "started_at": "2026-10-01T08:15:00+00:00", "last_checked_at": observed,
+                              "monitor_error": error, "log_tail": "RuntimeError: CUDA error"})
+    detail = client.get("/api/runs/" + run_id).json()["run"]
+    history = client.get("/api/runs").json()["runs"][0]
+    for run in (detail, history):
+        assert run["state"] == "RUNNING"
+        assert run["monitoring_stale"] is True
+        assert run["runtime_seconds"] == seconds
+        assert run["runtime_as_of"] == observed
+        assert run["ended_at"] is None
+    for route in ("/", "/runs/" + run_id):
+        page = client.get(route).text
+        assert "Last known: Running" in page
+        assert "· last check" in page
+    page = client.get("/runs/" + run_id).text
+    assert "Cluster check delayed" in page
+    assert 'id="status-explanation" hidden' in page
+    assert store.get_run(run_id)["state"] == "RUNNING"
+    assert "ended_at" not in store.get_run(run_id)
+
+
+@pytest.mark.parametrize("observed", [None, "not-a-timestamp", "2026-10-01T17:29:30", "2026-10-01T08:00:00+00:00"])
+def test_running_without_usable_observation_does_not_invent_elapsed_time(client, settings, fixed_web_clock, observed):
+    run_id = signed(client, settings).json()["run_id"]
+    Store(settings.database_path).update_run(run_id, {
+        "state": "RUNNING", "started_at": "2026-10-01T08:15:00+00:00", "last_checked_at": observed,
+    })
+    run = client.get("/api/runs/" + run_id).json()["run"]
+    assert run["monitoring_stale"] is True
+    assert run["runtime_seconds"] is None
+    assert run["runtime_as_of"] is None
+
+
+def test_monitoring_recovery_resumes_timer_but_final_timestamp_stays_authoritative(client, settings, fixed_web_clock):
+    run_id = signed(client, settings).json()["run_id"]
+    store = Store(settings.database_path)
+    store.update_run(run_id, {"state": "RUNNING", "started_at": "2026-10-01T17:00:00+00:00",
+                              "last_checked_at": "2026-10-01T17:01:00+00:00", "monitor_error": "Monitoring unavailable."})
+    stale = client.get("/api/runs/" + run_id).json()["run"]
+    assert stale["monitoring_stale"] is True and stale["runtime_seconds"] == 60
+    store.update_run(run_id, {"last_checked_at": "2026-10-01T17:29:30+00:00", "monitor_error": None})
+    run = client.get("/api/runs/" + run_id).json()["run"]
+    assert run["monitoring_stale"] is False
+    assert run["runtime_seconds"] == 1800
+    assert run["runtime_as_of"] == "2026-10-01T17:30:00+00:00"
+    store.update_run(run_id, {"state": "FAILED", "ended_at": "2026-10-01T17:01:00+00:00",
+                              "last_checked_at": None, "monitor_error": "Old monitoring problem."})
+    run = client.get("/api/runs/" + run_id).json()["run"]
+    assert run["monitoring_stale"] is False
+    assert run["runtime_seconds"] == 60
+    assert run["runtime_as_of"] == "2026-10-01T17:01:00+00:00"
+    assert "Last known: Failed" not in client.get("/runs/" + run_id).text

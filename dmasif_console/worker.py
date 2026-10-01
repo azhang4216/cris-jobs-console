@@ -257,7 +257,9 @@ class Worker:
         elif "TIMEOUT" in raw_states:
             state, reason = "TIMED_OUT", "The job exceeded its Slurm time limit."
         elif not all(succeeded(job) for job in jobs):
-            state, reason = "FAILED", "Slurm reported an unsuccessful job; valid files do not turn it into a success."
+            job = jobs[0]
+            state = "FAILED"
+            reason = f"Slurm reported {job.get('state', 'failure')} (exit code {job.get('exit_code') or 'unknown'}). See the execution logs."
         else:
             expected = result.get("expected_count", result.get("expected", 0))
             valid = result.get("valid_count", result.get("valid", 0))

@@ -1,7 +1,7 @@
 # dMaSIF job submission architecture
 
-Revision: R8, October 1, 2026. The free pilot receives signed GitHub pushes, submits isolated Slurm jobs, and serves a public dashboard from the laptop through a temporary HTTPS tunnel. Render remains optional. The R3 specialist review remains recorded below with its original scope.
-Scope: managed feature extraction from the private research repository. A frozen runtime and versioned adapter are installed in a new managed cluster root. The genuine invalid-config push, valid submission, replay protection, and restart recovery have passed; the valid GPU run is still queued, so execution and result acceptance remain unverified. Credentials and actual private paths stay outside Git.
+Revision: R9, October 1, 2026. The free pilot receives signed GitHub pushes, submits isolated Slurm jobs, and serves a public dashboard from the laptop through a temporary HTTPS tunnel. R9 adds compatible GPU selection, terminal accounting without stored comments, and honest stale-status timers. Render remains optional. The R3 specialist review remains recorded below with its original scope.
+Scope: managed feature extraction from the private research repository. A frozen runtime and versioned adapter are installed in a new managed cluster root. The genuine invalid-config push, submission, running-state observation, replay protection, and restart recovery passed. The first extraction failed on Blackwell; it now displays its confirmed failed state and 179-second duration. An H100 retry is pending, so successful scientific result acceptance remains unverified. Credentials and actual private paths stay outside Git.
 
 ## Current free live test
 
@@ -20,7 +20,7 @@ Start with **feature extraction**, the workflow already demonstrated on the clus
 Keep the first release small:
 
 - One approved research repository, four intended GitHub identities, one extraction interface. Only the operator's identity is approved in the current pilot; the other three must be provided before they can submit.
-- One demo dataset (`1STP`), one frozen runtime, one `quick-test` resource preset. The runtime's CPU launch passed; managed GPU validation is pending.
+- One demo dataset (`1STP`), one frozen runtime, one `quick-test` resource preset pinned to a compatible H100 through operator configuration. The runtime's CPU launch passed; successful managed GPU extraction is pending.
 - One application host running the web process and one worker, with SQLite and local files. Free live testing uses the laptop; Render is an optional deployment with a persistent disk.
 - Two screens: run history and run details.
 - One application job in flight; other accepted pushes wait in order.
@@ -155,6 +155,8 @@ Use a safe YAML parser and strict schema. Configuration cannot select arbitrary 
 
 Freeze and test the actually working Apptainer environment; do not assume the SIF matches the mutable sandbox. Record the image/checkpoint hashes, adapter version, and actual GPU/runtime details. Supply an explicit checkpoint rather than relying on the extractor's relative default.
 
+Pin an operator-approved `gpu_type` in mixed-generation clusters. This renders a typed one-GPU Slurm GRES request; researchers cannot override it. The current runtime requests the verified H100 type, since the unrestricted first test landed on an incompatible Blackwell GPU. Supporting Blackwell requires a separately validated runtime.
+
 The current cluster lacks `squashfuse`, so the operator enables `runtime_unsquash` for the frozen image. The adapter verifies its hash and extracts into a private temporary directory on node-local storage, with a free-space check before launch. It cleans that directory on normal and handled error exits; forced termination or node failure may require cleanup. This setting belongs to the tested runtime release, not researcher YAML. See [the adapter guide](docs/cluster-adapter.md).
 
 Mount the saved source read-only at a fixed container path; execute its `affinity/extract.py` and pass that snapshot as `--repo`. Set the working directory/import paths, disable Python user-site packages, clean the environment, and prevent inherited `PYTHONPATH` or the old checkout from supplying project modules. Verify and record resolved project-module paths. Test against the installed Apptainer version and site mounts. [Environment](https://apptainer.org/docs/user/latest/environment_and_metadata.html), [bind mounts](https://apptainer.org/docs/user/latest/bind_paths_and_mounts.html)
@@ -226,6 +228,10 @@ Use fixed SSH operations and validated identifiers; never concatenate branch nam
 3. Submit once with `sbatch --parsable`, an application-generated name/comment containing the UUID, absolute log paths, `--open-mode=append`, and `--no-requeue`. Appending preserves earlier log content if the same job is forcibly restarted.
 4. Atomically save the returned job ID in a remote receipt, then associate it in SQLite.
 5. Poll exact job IDs; use `sacct` for completed states, times, and exit codes. Disappearance from `squeue` does not prove completion.
+
+Some sites do not retain job comments in accounting. Accept an empty accounting comment only with the matching owner, complete UUID job name, and requested job ID when known; reject conflicting nonempty comments. A newer operator-installed helper may service read-only monitoring of old runs on the same host/user/root. Their submitted source, runtime, execution adapter, and immutable request remain pinned. Staging, submission, and cancellation continue using the accepted helper release.
+
+If monitoring has no conclusive evidence, preserve the raw state but label it **Last known**. Freeze a running timer at its last successful cluster observation; show unknown duration when that observation is unusable. A confirmed end time gives the final duration. An unavailable monitor must not imply that a process is still running.
 
 Render scheduler directives before submission: `#SBATCH` lines do not expand shell variables. The batch shell computes job-specific output paths after starting. Administrators can override requeue policy, so retain the execution claim alongside `--no-requeue`. [sbatch](https://slurm.schedmd.com/sbatch.html), [sacct](https://slurm.schedmd.com/sacct.html)
 
@@ -317,7 +323,7 @@ Every remote `request.json` retains the hook/delivery identity and verified-body
 
 Reliability, researcher UX, and simplicity reviewers agreed on the core workflow and requested a smaller first release. R3 removed individual web accounts, eleven-table registries, retry-attempt machinery, generic operation queues/leases, artifact-fetch queues, comparison screens, and training controls. R4 selects one Render application and local SQLite in response to the lab's hosting preference, preserving that smaller workflow. R5 simplifies run branch names; R6 removes the viewing password following the lab's decision to make results public, while retaining authenticated submissions and private backend credentials.
 
-R7 introduced free local observation through a public tunnel. R8 documents the installed push-to-run pilot, a separate private research repository, actionable configuration errors, frozen runtime compatibility, and actual replay/restart checks. Permanent hosting and valid GPU result acceptance remain open; a temporary public tunnel is not an always-on deployment.
+R7 introduced free local observation through a public tunnel. R8 documented the installed push-to-run pilot and actual replay/restart checks. R9 records the real Blackwell failure, recovered terminal status, frozen stale timers, safe upgrades of read-only monitoring helpers, and H100 selection for a new run. Permanent hosting and successful GPU result acceptance remain open; a temporary public tunnel is not an always-on deployment.
 
 It keeps safeguards tied to actual or credible failures: GitHub attribution, pinned execution, unique run/job output directories, expected-output validation, replay protection, durable submission evidence, and reconciliation of ambiguous submission.
 

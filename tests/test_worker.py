@@ -167,6 +167,32 @@ def test_nonzero_scheduler_outcome_cannot_be_success(setup):
     adapter.complete("FAILED", "1:0")
     worker.tick()
     assert store.get_run(run_id)["state"] == "FAILED"
+    assert "FAILED (exit code 1:0)" in store.get_run(run_id)["reason"]
+
+
+def test_recovered_failure_replaces_stale_running_without_resubmission(setup, monkeypatch):
+    settings, store, adapter, worker = setup
+    run_id = enqueue(settings, store)
+    worker.tick()
+    adapter.job.update(state="RUNNING", started_at="2026-10-01T08:16:49+00:00")
+    worker.tick()
+    with monkeypatch.context() as patch:
+        patch.setattr(adapter, "poll", lambda run: [])
+        worker.tick()
+    stale = store.get_run(run_id)
+    assert stale["state"] == "RUNNING" and stale["monitor_error"]
+    assert stale.get("ended_at") is None
+    adapter.complete("FAILED", "1:0")
+    adapter.job["ended_at"] = "2026-10-01T08:19:48+00:00"
+    adapter.result = None
+    worker.tick()
+    failed = store.get_run(run_id)
+    assert failed["state"] == "FAILED"
+    assert failed["ended_at"] == adapter.job["ended_at"]
+    assert failed["monitor_error"] is None
+    assert not failed["capacity_reserved"]
+    assert failed["artifacts"] == []
+    assert adapter.submit_count == 1
 
 
 def test_download_failure_does_not_change_scientific_success(setup):

@@ -76,6 +76,10 @@ class ClusterConfig(StrictModel):
     known_hosts_path: Path | None = None
     account: str = "lab-account"
     partition: str = "gpu"
+    # Operator-pinned Slurm GRES type, kept with the accepted runtime policy.
+    # None preserves untyped allocation for sites whose runtime supports it.
+    gpu_type: str | None = Field(default=None, strict=True, min_length=1, max_length=100,
+                                 pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
     qos: Literal["test"] = "test"
     cpus: int = 8
     memory_gb: int = 64

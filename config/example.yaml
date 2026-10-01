@@ -38,6 +38,9 @@ cluster:
   helper_path: /srv/lab/job_console/releases/adapters/v1/helper.py
   account: lab-account
   partition: gpu
+  # Operator-only: use the site's exact GRES type for the tested runtime.
+  # null permits any GPU model; it does not guarantee runtime compatibility.
+  gpu_type: nvidia_h100_80gb_hbm3  # Example H100 type; verify at your site.
   qos: test
   runtime_image: /srv/lab/job_console/releases/containers/APPROVED.sif
   runtime_sha256: REPLACE_WITH_RUNTIME_SHA256

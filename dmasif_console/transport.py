@@ -87,6 +87,15 @@ class SSHAdapter:
         if not key or not known_hosts:
             raise TransportError("SSH key and pinned known_hosts files are required")
         helper, root = cluster["helper_path"], cluster["root"]
+        # Execution stays pinned to the accepted release. Read-only monitoring
+        # may use a newer operator-installed helper for that same cluster/root,
+        # so accounting fixes can reconcile old jobs without rewriting their
+        # immutable source, runtime, adapter identity, or submission request.
+        read_operations = {"reconcile", "status", "logs", "result", "artifact"}
+        if operation in read_operations and all(
+            cluster.get(name) == _get(self.cluster, name) for name in ("host", "user", "root")
+        ):
+            helper = _get(self.cluster, "helper_path")
         for value in (helper, root):
             if not re.fullmatch(r"/[A-Za-z0-9_./-]+", value) or ".." in Path(value).parts:
                 raise TransportError("Invalid managed cluster path")

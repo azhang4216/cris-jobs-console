@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import copy
 from types import SimpleNamespace
 import subprocess
 import tarfile
@@ -116,3 +117,51 @@ def test_ssh_submit_timeout_is_uncertain_without_retry(monkeypatch, tmp_path):
     with pytest.raises(SubmissionUncertain):
         SSHAdapter(settings).submit(run)
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("operation", ["reconcile", "status", "logs", "result", "artifact", "stage", "submit", "cancel"])
+def test_monitor_upgrade_preserves_pinned_execution_release(monkeypatch, tmp_path, operation):
+    settings, run, _ = fixture(tmp_path)
+    key = tmp_path / "key"
+    key.write_bytes(b"synthetic test key")
+    pinned = dict(host="login.example.invalid", user="researcher", root="/srv/lab/job_console",
+                  helper_path="/srv/lab/job_console/releases/old/helper.py")
+    run["resolved"]["cluster"] = copy.deepcopy(pinned)
+    current_helper = "/srv/lab/job_console/releases/new/helper.py"
+    settings.cluster = SimpleNamespace(**{**pinned, "helper_path": current_helper,
+                                         "ssh_key_path": key, "known_hosts_path": tmp_path / "known_hosts"})
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return SimpleNamespace(returncode=0, stdout=b'{"ok":true,"result":[]}', stderr=b"")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    SSHAdapter(settings)._call(operation, {}, run=run)
+    expected = pinned["helper_path"] if operation in {"stage", "submit", "cancel"} else current_helper
+    assert expected in calls[0][-1]
+    assert run["resolved"]["cluster"] == pinned
+
+
+@pytest.mark.parametrize("changed", ["host", "user", "root"])
+def test_monitor_upgrade_cannot_redirect_another_cluster(monkeypatch, tmp_path, changed):
+    settings, run, _ = fixture(tmp_path)
+    key = tmp_path / "key"
+    key.write_bytes(b"synthetic test key")
+    pinned = dict(host="login.example.invalid", user="researcher", root="/srv/lab/job_console",
+                  helper_path="/srv/lab/job_console/releases/old/helper.py")
+    run["resolved"]["cluster"] = copy.deepcopy(pinned)
+    current = {**pinned, changed: {"host": "another.example.invalid", "user": "someone_else", "root": "/srv/another"}[changed],
+               "helper_path": "/srv/new/helper.py", "ssh_key_path": key, "known_hosts_path": tmp_path / "known_hosts"}
+    settings.cluster = SimpleNamespace(**current)
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return SimpleNamespace(returncode=0, stdout=b'{"ok":true,"result":[]}', stderr=b"")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    SSHAdapter(settings)._call("status", {}, run=run)
+    assert pinned["helper_path"] in calls[0][-1]
+    assert "researcher@login.example.invalid" in calls[0]
+    assert "--root /srv/lab/job_console" in calls[0][-1]

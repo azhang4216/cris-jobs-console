@@ -33,6 +33,7 @@ STATUS_LABELS = {
     "TIMED_OUT": "Timed out", "NEEDS_REVIEW": "Needs review",
     "COMPLETED": "Completed",
 }
+MONITORED_STATES = {"QUEUED", "RUNNING", "SUBMITTING", "SUBMISSION_UNKNOWN", "VALIDATING_RESULTS"}
 PUBLIC_RUN_FIELDS = {
     "id", "display_id", "actor_login", "actor_id", "experiment", "branch", "commit_sha", "commit_url",
     "dataset_id", "state", "reason", "created_at", "updated_at", "submitted_at", "started_at", "ended_at",
@@ -92,14 +93,29 @@ def public_run(run: dict, settings: Settings) -> dict:
     result["commit_url"] = f"{settings.repository.url}/commit/{sha}" if sha else None
     result["source_kind"] = "slurm" if run.get("source_kind") == "slurm" else "github"
     result["last_observed_at"] = run.get("last_observed_at") or run.get("last_checked_at")
-    result["runtime_seconds"] = None
-    if run.get("started_at") and (run.get("ended_at") or run.get("state") == "RUNNING"):
+    def timestamp(value):
         try:
-            start = datetime.fromisoformat(run["started_at"].replace("Z", "+00:00"))
-            end = datetime.fromisoformat(run["ended_at"].replace("Z", "+00:00")) if run.get("ended_at") else datetime.now(timezone.utc)
-            result["runtime_seconds"] = max(0, (end - start).total_seconds())
-        except (ValueError, TypeError):
-            pass
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return parsed if parsed.tzinfo is not None else None
+        except (AttributeError, ValueError, TypeError):
+            return None
+
+    current = datetime.now(timezone.utc)
+    observed = timestamp(result["last_observed_at"])
+    result["monitoring_stale"] = run.get("state") in MONITORED_STATES and (
+        bool(run.get("monitor_error")) or observed is None
+        or (current - observed).total_seconds() > max(120, settings.poll_seconds * 3)
+    )
+    result["runtime_seconds"] = None
+    result["runtime_as_of"] = None
+    start, end = timestamp(run.get("started_at")), timestamp(run.get("ended_at"))
+    if not end and run.get("state") == "RUNNING":
+        # A missing terminal observation is not evidence of continued execution.
+        # Freeze at the last successful check until monitoring recovers.
+        end = observed if result["monitoring_stale"] else current
+    if start and end and end >= start:
+        result["runtime_seconds"] = (end - start).total_seconds()
+        result["runtime_as_of"] = end.isoformat()
     raw_validation = run.get("validation") or run.get("result") or {}
     result["validation"] = {k: raw_validation[k] for k in ("outcome", "expected", "valid", "expected_count", "valid_count") if k in raw_validation}
     result["validation"]["errors"] = [

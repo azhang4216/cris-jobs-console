@@ -162,6 +162,64 @@ def test_status_finishes_when_job_is_purged_from_live_queue(tmp_path):
     assert not any(arg.startswith("--jobs=") for arg in calls[1])
 
 
+@pytest.mark.parametrize(("state", "exit_code"), [("FAILED", "1:0"), ("COMPLETED", "0:0"), ("OUT_OF_MEMORY", "0:125")])
+def test_terminal_accounting_without_stored_comments_is_recognized(tmp_path, state, exit_code):
+    helper, ident, directory = staged_helper(tmp_path)
+    tag = "dm-" + ident
+    write_json(directory / "submission-intent.json", {"owner": "lab", "tag": tag, "created_at": "2026-01-01T00:00:00+00:00"})
+    calls = []
+
+    def command(argv, **_):
+        calls.append(argv)
+        if argv[0] == "sacct":
+            return f"10|{state}|{exit_code}|2026-01-01T00:00:00|2026-01-01T00:01:00|2026-01-01T00:02:00|{tag}|lab|\n"
+        return ""
+
+    helper.command = command
+    jobs = helper.status({"run_id": ident, "jobs": [{"job_id": "10"}]})
+    assert len(jobs) == 1 and jobs[0]["job_id"] == "10"
+    assert jobs[0]["state"] == state and jobs[0]["terminal"] is True
+    assert jobs[0]["exit_code"] == exit_code
+    assert jobs[0]["ended_at"] == "2026-01-01T00:02:00+00:00"
+    assert "State%64" in next(arg for arg in calls[0] if arg.startswith("--format="))
+    assert all("--local" in argv for argv in calls)
+
+
+@pytest.mark.parametrize("mismatch", ["id", "owner", "name", "comment"])
+def test_optional_accounting_comment_does_not_weaken_allocation_identity(tmp_path, mismatch):
+    helper, ident, directory = staged_helper(tmp_path)
+    tag = "dm-" + ident
+    write_json(directory / "submission-intent.json", {"owner": "lab", "tag": tag, "created_at": "2026-01-01T00:00:00+00:00"})
+    ident_value = "11" if mismatch == "id" else "10"
+    owner = "another-user" if mismatch == "owner" else "lab"
+    name = tag[:-1] if mismatch == "name" else tag
+    comment = "conflicting-comment" if mismatch == "comment" else ""
+    helper.command = lambda argv, **_: (f"{ident_value}|FAILED|1:0|2026-01-01T00:00:00|2026-01-01T00:01:00|2026-01-01T00:02:00|{name}|{owner}|{comment}\n"
+                                       if argv[0] == "sacct" else "")
+    assert helper.status({"run_id": ident, "jobs": [{"job_id": "10"}]}) == []
+
+
+def test_lost_receipt_reconciles_terminal_job_without_stored_comment(tmp_path):
+    helper, ident, directory = staged_helper(tmp_path)
+    tag = "dm-" + ident
+    write_json(directory / "submission-intent.json", {"owner": "lab", "tag": tag, "created_at": "2026-01-01T00:00:00+00:00"})
+    helper.command = lambda argv, **_: (f"10|FAILED|1:0|2026-01-01T00:00:00|2026-01-01T00:01:00|2026-01-01T00:02:00|{tag}|lab|\n"
+                                       if argv[0] == "sacct" else "")
+    assert not (directory / "submission-receipt.json").exists()
+    jobs = helper.reconcile({"run_id": ident})
+    assert len(jobs) == 1 and jobs[0]["state"] == "FAILED" and jobs[0]["terminal"] is True
+
+
+@pytest.mark.parametrize("comment", ["", "conflicting-comment"])
+def test_live_queue_still_requires_matching_comment(tmp_path, comment):
+    helper, ident, directory = staged_helper(tmp_path)
+    tag = "dm-" + ident
+    write_json(directory / "submission-intent.json", {"owner": "lab", "tag": tag, "created_at": "2026-01-01T00:00:00+00:00"})
+    helper.command = lambda argv, **_: (f"10|RUNNING|2026-01-01T00:00:00|2026-01-01T00:01:00|{tag}|lab|{comment}|None\n"
+                                       if argv[0] == "squeue" else "")
+    assert helper.status({"run_id": ident, "jobs": [{"job_id": "10"}]}) == []
+
+
 @pytest.mark.parametrize("failed_command", ["sacct", "squeue"])
 def test_status_does_not_hide_genuine_scheduler_failures(tmp_path, failed_command):
     helper, ident, directory = staged_helper(tmp_path)
@@ -422,6 +480,23 @@ def test_unsquash_is_only_an_operator_boolean():
         ClusterConfig(runtime_unsquash="false")
     with pytest.raises(ValidationError):
         ExperimentConfig(dataset_id="demo", repeat_id="one", runtime_unsquash=True)
+
+
+@pytest.mark.parametrize("gpu_type,expected", [(None, "gpu:1"), ("nvidia_h100_80gb_hbm3", "gpu:nvidia_h100_80gb_hbm3:1"), ("nvidia_h200", "gpu:nvidia_h200:1")])
+def test_batch_requests_only_the_configured_gpu_type(tmp_path, gpu_type, expected):
+    helper, _, directory = staged_helper(tmp_path)
+    script = helper.batch_script(directory, tmp_path / "adapter", {"account": "lab", "partition": "gpu", "gpu_type": gpu_type})
+    requests = [line for line in script.splitlines() if line.startswith("#SBATCH --gres=")]
+    assert requests == ["#SBATCH --gres=" + expected]
+    assert "#SBATCH --qos=test" in script
+    assert "#SBATCH --time=00:15:00" in script
+
+
+@pytest.mark.parametrize("gpu_type", ["", "gpu:h100:8", "h100|h200", "h100\n#SBATCH --gres=gpu:8", 123, True, ["h100"], "x" * 101])
+def test_helper_rejects_unsafe_gpu_type_even_without_local_config_validation(tmp_path, gpu_type):
+    helper, _, directory = staged_helper(tmp_path)
+    with pytest.raises(AdapterError, match="GPU type"):
+        helper.batch_script(directory, tmp_path / "adapter", {"account": "lab", "partition": "gpu", "gpu_type": gpu_type})
 
 
 def test_reported_slurm_cluster_does_not_change_database_job_identity(tmp_path):

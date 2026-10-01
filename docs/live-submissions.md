@@ -2,7 +2,7 @@
 
 The research repository is [azhang4216/dmasif-experiments](https://github.com/azhang4216/dmasif-experiments). Its `main` branch is for development; pushes to `runs/<experiment>` request a run. The dashboard and receiver run together on the application host. Researchers do not receive SSH credentials.
 
-The operator registers immutable input, checkpoint, and container hashes, installs the fixed adapter in a new managed cluster root, and approves numeric GitHub user IDs. The initial extraction preset uses one registered `1STP.pdb` input, one GPU, eight CPU cores, 64 GB memory, and a 15-minute limit. Runtime packaging is a separate CPU-only setup job.
+The operator registers immutable input, checkpoint, and container hashes, installs the fixed adapter in a new managed cluster root, and approves numeric GitHub user IDs. The extraction preset uses one registered `1STP.pdb` input, one H100 GPU, eight CPU cores, 64 GB memory, and a 15-minute limit. The H100 restriction keeps this frozen runtime off incompatible Blackwell GPUs. Runtime packaging is a separate CPU-only setup job.
 
 ## Start the configured workstation
 
@@ -44,7 +44,7 @@ Use two distinct branches and retain their complete commit SHAs. Do not change a
 
 | Case | Request | Evidence required |
 | --- | --- | --- |
-| Valid extraction | `runs/1stp-smoke-check`, registered dataset, integer seed | Genuine GitHub delivery; exact actor/commit/config; recorded queue and running observations; terminal Slurm success; validated NPZ; readable logs; working checksum-verified download. |
+| Valid extraction | `runs/1stp-smoke-check-h100`, registered dataset, integer seed | Genuine GitHub delivery; exact actor/commit/config; recorded queue and running observations; terminal Slurm success; validated NPZ; readable logs; working checksum-verified download. |
 | Invalid configuration | `runs/config-rejection-check`, seed set to a string | Genuine GitHub delivery; rejected status; clear seed type/range message; exact actor/commit/source identity; no Slurm job, GPU use, or result files. |
 
 The detail page retains received/submitted/started/ended times, actual state transitions, GitHub identity, code link, configuration, runtime/checkpoint/source hashes, scheduler ID and exit code, logs, and result validation. Raw rejected YAML remains private; the site displays safe field-specific diagnostics. A very short job can finish between polls; the service must not invent a running observation. Scientific success requires valid results as well as a successful scheduler exit.
@@ -57,7 +57,7 @@ With the project installed in `.venv`, run the saved verifier from this checkout
 .venv/bin/python scripts/verify_live_acceptance.py http://127.0.0.1:8002
 ```
 
-It defaults to the current pilot's two exact commits, branch names, research repository, and `azhang4216` identity. Use `--help` to override these identities, replace the base URL to verify the public site, or add `--output /tmp/dmasif-acceptance.json` to save its JSON summary. It uses only cached HTTP GET routes and checks real execution evidence plus the downloaded NPZ. Exit `0` means all checks passed, `2` means pending or unavailable, and `1` means verification failed. A queued job must remain pending; it is never counted as a pass.
+It defaults to the H100 retry's exact commit/repeat label, the original invalid-config commit, their branches, research repository, and `azhang4216` identity. The original unrestricted smoke test remains a failed historical run; it is not rewritten or counted as a pass. Use `--help` to override these identities, replace the base URL to verify the public site, or add `--output /tmp/dmasif-acceptance.json` to save its JSON summary. It uses only cached HTTP GET routes and checks real execution evidence plus the downloaded NPZ. Exit `0` means all checks passed, `2` means pending or unavailable, and `1` means verification failed. A queued job must remain pending; it is never counted as a pass.
 
 Each run has a distinct UUID and allocation directory. Retain submission/execution claims and receipts; an uncertain response must be reconciled, never retried blindly. Do not reuse the historical shared output directory.
 

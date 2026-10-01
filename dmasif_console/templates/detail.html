@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% from 'macros.html' import status_badge, timestamp, commit_link %}
+{% from 'macros.html' import status_badge, timestamp, commit_link, monitoring_attributes %}
 {% block title %}{{ run.get('experiment') or 'Run details' }}{% endblock %}
 {% block page %}detail{% endblock %}
 {% block content %}
@@ -9,14 +9,14 @@
   <a href="/" class="back-link"><span aria-hidden="true">←</span> All runs</a>
   <section class="page-heading detail-heading">
     <h1>{{ run.get('experiment') or 'Run details' }}</h1>
-    <div id="detail-status">{{ status_badge(run.get('state', 'CHECKING_REQUEST'), status_labels) }}</div>
+    <div id="detail-status">{{ status_badge(run.get('state', 'CHECKING_REQUEST'), status_labels, run) }}</div>
   </section>
-  <p class="small-note status-explanation" id="status-explanation" {% if needs_help or not run.get('reason') %}hidden{% endif %}>{{ run.get('reason') or '' }}</p>
+  <p class="small-note status-explanation" id="status-explanation" {% if needs_help or run.get('monitoring_stale') or not run.get('reason') %}hidden{% endif %}>{{ run.get('reason') or '' }}</p>
   {% if run.get('source_kind') == 'slurm' %}<p class="small-note imported-note">Imported from Slurm. Researcher, commit, and dataset are unavailable. Scheduler completion does not verify results.</p>{% endif %}
 
-  <div class="run-notice" id="run-notice" {% if not needs_help and not run.get('monitor_error') %}hidden{% endif %}>
-    <strong id="notice-label">{{ 'Needs attention' if needs_help else 'Monitoring issue' }}</strong>
-    <p id="run-reason">{{ (run.get('reason') if needs_help else run.get('monitor_error')) or 'Contact the operator for help.' }}</p>
+  <div class="run-notice" id="run-notice" {% if not needs_help and not run.get('monitor_error') and not run.get('monitoring_stale') %}hidden{% endif %}>
+    <strong id="notice-label">{{ 'Needs attention' if needs_help else 'Cluster check delayed' }}</strong>
+    <p id="run-reason">{{ (run.get('reason') if needs_help else run.get('monitor_error')) or ('Cluster updates are delayed; showing the last known status.' if run.get('monitoring_stale') else 'Contact the operator for help.') }}</p>
     <p class="small-note" id="operator-help" {% if not needs_help %}hidden{% endif %}>Contact {{ settings.get('operator_contact', 'the lab operator') }} for help.</p>
     <span class="capacity-note" id="capacity-note" {% if not run.get('capacity_reserved') %}hidden{% endif %}>Job slot reserved.</span>
   </div>
@@ -26,7 +26,7 @@
     <div><span>Submitted</span><strong data-timing="submitted_at">{{ timestamp(run.get('submitted_at')) }}</strong></div>
     <div><span>Started</span><strong data-timing="started_at">{{ timestamp(run.get('started_at')) }}</strong></div>
     <div><span>Ended</span><strong data-timing="ended_at">{{ timestamp(run.get('ended_at')) }}</strong></div>
-    <div><span>Runtime</span><strong class="mono" data-runtime data-start="{{ run.get('started_at') or '' }}" data-end="{{ run.get('ended_at') or '' }}" data-seconds="{{ run.get('runtime_seconds') if run.get('runtime_seconds') is not none else '' }}" data-state="{{ run.get('state', '') }}">—</strong></div>
+    <div><span>Runtime</span><strong class="mono" data-runtime data-start="{{ run.get('started_at') or '' }}" data-end="{{ run.get('ended_at') or '' }}" data-seconds="{{ run.get('runtime_seconds') if run.get('runtime_seconds') is not none else '' }}" {{ monitoring_attributes(run) }}>{% if run.get('runtime_seconds') is not none %}{{ run.get('runtime_seconds') }}s{% if run.get('monitoring_stale') and not run.get('ended_at') %} · last check{% endif %}{% else %}—{% endif %}</strong></div>
   </section>
 
   <div class="detail-grid">

@@ -10,6 +10,7 @@
     TIMED_OUT: "Timed out", NEEDS_REVIEW: "Needs review", COMPLETED: "Completed",
   };
   const attentionStates = new Set(["SUBMISSION_UNKNOWN", "NEEDS_REVIEW", "PREPARATION_FAILED", "REJECTED", "PARTIAL", "FAILED", "TIMED_OUT"]);
+  const monitoredStates = new Set(["QUEUED", "RUNNING", "SUBMITTING", "SUBMISSION_UNKNOWN", "VALIDATING_RESULTS"]);
   const page = document.body.dataset.page;
   const apiBase = (document.body.dataset.apiBaseUrl || "").replace(/\/$/, "");
   const pollMilliseconds = Math.max(3000, Number(document.body.dataset.pollSeconds || 15) * 1000);
@@ -18,6 +19,7 @@
   const dateFormatter = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
   const fullDateFormatter = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", timeZoneName: "short" });
   let latestRuns = null;
+  let latestDetailRun = null;
   let previousRuns = "";
   let previousActivity = "";
   let previousArtifacts = "";
@@ -52,6 +54,11 @@
     return Number.isNaN(date.getTime()) ? null : date;
   }
 
+  function observationDate(value) {
+    // A timezone-free value cannot establish when the cluster was checked.
+    return typeof value === "string" && /(?:Z|[+-]\d{2}:\d{2})$/.test(value) ? parseDate(value) : null;
+  }
+
   function timeNode(value, fallback = "—") {
     const date = parseDate(value);
     if (!date) return node("span", "muted", fallback);
@@ -80,7 +87,23 @@
     return `${Math.floor(total / 86400)}d ${Math.floor(total % 86400 / 3600)}h`;
   }
 
+  function monitoringData(element, run) {
+    if (!run) return;
+    element.dataset.state = run.state || "";
+    element.dataset.observed = run.last_observed_at || "";
+    element.dataset.monitorError = String(Boolean(run.monitor_error));
+    element.dataset.monitoringStale = String(Boolean(run.monitoring_stale));
+  }
+
+  function monitoringStale(element) {
+    if (!monitoredStates.has(element.dataset.state || element.dataset.status)) return false;
+    const observed = observationDate(element.dataset.observed);
+    return element.dataset.monitorError === "true" || element.dataset.monitoringStale === "true"
+      || !observed || Date.now() - observed.getTime() > Math.max(120000, clusterPollMilliseconds * 3);
+  }
+
   function updateRuntime(element, run) {
+    monitoringData(element, run);
     if (run) {
       element.dataset.start = run.started_at || "";
       element.dataset.end = run.ended_at || "";
@@ -89,10 +112,16 @@
     }
     const start = parseDate(element.dataset.start);
     const end = parseDate(element.dataset.end);
+    const observed = observationDate(element.dataset.observed);
+    const stale = monitoringStale(element);
     let seconds = element.dataset.seconds === "" ? null : Number(element.dataset.seconds);
     if (start && end) seconds = (end - start) / 1000;
-    else if (start && element.dataset.state === "RUNNING") seconds = (Date.now() - start) / 1000;
-    element.textContent = seconds === null ? "—" : duration(seconds);
+    else if (start && element.dataset.state === "RUNNING") {
+      seconds = stale ? (observed && observed >= start ? (observed - start) / 1000 : null) : (Date.now() - start) / 1000;
+    }
+    const capped = stale && !end && seconds !== null;
+    element.textContent = seconds === null ? "—" : `${duration(seconds)}${capped ? " · last check" : ""}`;
+    element.title = capped && observed ? `Runtime at the last successful cluster check: ${fullDateFormatter.format(observed)}` : "";
   }
 
   function bytes(value) {
@@ -103,13 +132,24 @@
     return `${(amount / (1024 * 1024)).toFixed(1)} MiB`;
   }
 
-  function statusNode(state) {
+  function updateStatus(element) {
+    const state = element.dataset.status;
+    const stale = monitoringStale(element);
+    const text = `${stale ? "Last known: " : ""}${labels[state] || state}`;
+    if (element.textContent.trim() !== text) {
+      const dot = node("span", "status-dot");
+      dot.setAttribute("aria-hidden", "true");
+      element.replaceChildren(dot, document.createTextNode(text));
+    }
+    element.title = stale ? "Cluster updates are delayed; this is the last known status." : "";
+  }
+
+  function statusNode(state, run) {
     const safeState = Object.hasOwn(labels, state) ? state : "NEEDS_REVIEW";
     const element = node("span", `status-badge status-${safeState.toLowerCase()}`);
     element.dataset.status = safeState;
-    const dot = node("span", "status-dot");
-    dot.setAttribute("aria-hidden", "true");
-    element.append(dot, document.createTextNode(labels[safeState]));
+    monitoringData(element, run);
+    updateStatus(element);
     return element;
   }
 
@@ -159,7 +199,7 @@
     const researcher = node("td", "", run.actor_login || (run.source_kind === "slurm" ? "—" : "Unknown researcher"));
     const commit = node("td"); commit.append(commitNode(run));
     const dataset = node("td"); dataset.append(node("span", "dataset-name", run.dataset_id || "—"));
-    const state = node("td"); state.append(statusNode(run.state));
+    const state = node("td"); state.append(statusNode(run.state, run));
     const received = node("td", "nowrap time-cell"); received.append(timeNode(run.source_kind === "slurm" ? run.submitted_at : run.created_at));
     const runtime = node("td", "mono runtime-cell"); runtime.dataset.runtime = ""; updateRuntime(runtime, run);
     row.append(identity, researcher, commit, dataset, state, received, runtime);
@@ -344,28 +384,38 @@
     document.getElementById("log-observed").replaceChildren(document.createTextNode("Updated "), timeNode(observedAt));
   }
 
+  function renderDetailMonitoring(run) {
+    const stale = monitoringStale(document.querySelector("#detail-status [data-status]"));
+    const needsHelp = attentionStates.has(run.state);
+    const explanation = document.getElementById("status-explanation");
+    explanation.hidden = needsHelp || stale || !run.reason;
+    explanation.textContent = run.reason || "";
+    const notice = document.getElementById("run-notice");
+    notice.hidden = !needsHelp && !run.monitor_error && !stale;
+    document.getElementById("notice-label").textContent = needsHelp ? "Needs attention" : "Cluster check delayed";
+    document.getElementById("run-reason").textContent = (needsHelp ? run.reason : run.monitor_error)
+      || (stale ? "Cluster updates are delayed; showing the last known status." : "Contact the operator for help.");
+    document.getElementById("operator-help").hidden = !needsHelp;
+    document.getElementById("capacity-note").hidden = !run.capacity_reserved;
+    const observed = document.getElementById("last-observed");
+    observed.replaceChildren(timeNode(run.last_observed_at));
+    observed.classList.toggle("connection-stale", stale);
+    if (stale) observed.append(node("span", "cell-secondary", "Update delayed"));
+  }
+
   function renderDetail(data) {
     const run = data.run;
     if (!run || !run.id) throw new Error("Invalid run response");
+    latestDetailRun = run;
     if (data.status_labels) Object.assign(labels, data.status_labels);
-    document.getElementById("detail-status").replaceChildren(statusNode(run.state));
-    const needsHelp = attentionStates.has(run.state);
+    document.getElementById("detail-status").replaceChildren(statusNode(run.state, run));
+    renderDetailMonitoring(run);
     const jobs = Array.isArray(data.jobs) ? data.jobs : [];
     const noJobSubmitted = ["REJECTED", "PREPARATION_FAILED"].includes(run.state) && !run.submitted_at && jobs.length === 0;
-    const explanation = document.getElementById("status-explanation");
-    explanation.hidden = needsHelp || !run.reason;
-    explanation.textContent = run.reason || "";
-    const notice = document.getElementById("run-notice");
-    notice.hidden = !needsHelp && !run.monitor_error;
-    document.getElementById("notice-label").textContent = needsHelp ? "Needs attention" : "Monitoring issue";
-    document.getElementById("run-reason").textContent = (needsHelp ? run.reason : run.monitor_error) || "Contact the operator for help.";
-    document.getElementById("operator-help").hidden = !needsHelp;
-    document.getElementById("capacity-note").hidden = !run.capacity_reserved;
     document.querySelectorAll("[data-timing]").forEach((element) => {
       element.replaceChildren(timeNode(run[element.dataset.timing]));
     });
     document.querySelectorAll("[data-runtime]").forEach((element) => updateRuntime(element, run));
-    document.getElementById("last-observed").replaceChildren(timeNode(run.last_observed_at));
     document.getElementById("detail-dataset").textContent = run.dataset_id || "—";
     for (const key of ["validation", "config", "provenance"]) {
       document.getElementById(`${key}-json`).textContent = JSON.stringify(key === "provenance" ? publicProvenance(run[key]) : (run[key] || {}), null, 2);
@@ -374,12 +424,6 @@
     renderJobs(jobs, noJobSubmitted);
     renderEvents(Array.isArray(data.events) ? data.events : []);
     if (typeof run.log_tail === "string") renderLogs(run.log_tail, run.last_observed_at, run.source_kind, noJobSubmitted);
-    // A functioning dashboard API is separate from a recent successful cluster check.
-    const observed = parseDate(run.last_observed_at);
-    const shouldBeObserved = ["QUEUED", "RUNNING", "SUBMITTING", "SUBMISSION_UNKNOWN", "VALIDATING_RESULTS"].includes(run.state);
-    const stale = shouldBeObserved && (!observed || Date.now() - observed.getTime() > Math.max(120000, clusterPollMilliseconds * 3));
-    document.getElementById("last-observed").classList.toggle("connection-stale", stale);
-    if (stale) document.getElementById("last-observed").append(node("span", "cell-secondary", "Update delayed"));
   }
 
   async function getJSON(path) {
@@ -435,7 +479,12 @@
   document.querySelectorAll("[data-timezone]").forEach((element) => { element.textContent = zone; });
   document.querySelectorAll("[data-bytes]").forEach((element) => { element.textContent = bytes(element.dataset.bytes); });
   formatTimes();
-  document.querySelectorAll("[data-runtime]").forEach((element) => updateRuntime(element));
+  function refreshMonitoring() {
+    document.querySelectorAll("[data-runtime]").forEach((element) => updateRuntime(element));
+    document.querySelectorAll(".status-badge[data-status]").forEach((element) => updateStatus(element));
+    if (latestDetailRun) renderDetailMonitoring(latestDetailRun);
+  }
+  refreshMonitoring();
   if (page === "history") {
     const form = document.getElementById("run-filters");
     form.addEventListener("submit", (event) => { event.preventDefault(); onFilterChange(); });
@@ -462,6 +511,6 @@
   // Poll serially; slow requests cannot create a growing queue of overlapping requests.
   async function schedule() { await poll(); setTimeout(schedule, pollMilliseconds); }
   document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });
-  setInterval(() => { if (!document.hidden) document.querySelectorAll("[data-runtime]").forEach((element) => updateRuntime(element)); }, 1000);
+  setInterval(() => { if (!document.hidden) refreshMonitoring(); }, 1000);
   schedule();
 })();

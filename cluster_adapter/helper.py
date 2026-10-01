@@ -202,9 +202,16 @@ class Helper:
         cpus, memory, minutes = int(cluster.get("cpus", 8)), int(cluster.get("memory_gb", 64)), int(cluster.get("wall_minutes", 15))
         if not (1 <= cpus <= 8 and 1 <= memory <= 64 and 1 <= minutes <= 15 and cluster.get("qos", "test") == "test"):
             raise AdapterError("Resources exceed the tested quick-test limits")
+        gpu_type = cluster.get("gpu_type")
+        if gpu_type is not None and (
+            type(gpu_type) is not str or not 1 <= len(gpu_type) <= 100
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", gpu_type) is None
+        ):
+            raise AdapterError("GPU type must be an operator-configured scheduler token")
+        gpu_request = "gpu:1" if gpu_type is None else f"gpu:{gpu_type}:1"
         return "\n".join([
             "#!/bin/bash", f"#SBATCH --account={scheduler_token(cluster['account'])}",
-            f"#SBATCH --partition={scheduler_token(cluster['partition'])}", "#SBATCH --qos=test", "#SBATCH --gres=gpu:1",
+            f"#SBATCH --partition={scheduler_token(cluster['partition'])}", "#SBATCH --qos=test", f"#SBATCH --gres={gpu_request}",
             f"#SBATCH --cpus-per-task={cpus}", f"#SBATCH --mem={memory}G", f"#SBATCH --time=00:{minutes:02d}:00",
             f"#SBATCH --output={directory}/logs/slurm-%j.out", f"#SBATCH --error={directory}/logs/slurm-%j.err",
             "#SBATCH --open-mode=append", "#SBATCH --no-requeue", "set -euo pipefail", "umask 077", "unset PYTHONPATH PYTHONHOME", "export PYTHONNOUSERSITE=1", "module load apptainer",
@@ -246,8 +253,8 @@ class Helper:
         intent = read_json(directory / "submission-intent.json")
         owner, tag = intent["owner"], intent["tag"]
         start = intent["created_at"][:19]
-        accounting = ["sacct", "--noheader", "--parsable2", "--allocations", "--user=" + owner, "--starttime=" + start, "--format=JobIDRaw,State,ExitCode,Submit,Start,End,JobName%100,User%100,Comment%100"]
-        queue = ["squeue", "--noheader", "--user=" + owner, "--format=%i|%T|%V|%S|%j|%u|%k|%r"]
+        accounting = ["sacct", "--local", "--noheader", "--parsable2", "--allocations", "--user=" + owner, "--starttime=" + start, "--format=JobIDRaw,State%64,ExitCode,Submit,Start,End,JobName%100,User%100,Comment%100"]
+        queue = ["squeue", "--local", "--noheader", "--user=" + owner, "--format=%i|%T|%V|%S|%j|%u|%k|%r"]
         requested = None
         if ids:
             valid_ids = [job_id(value) for value in ids]
@@ -265,7 +272,11 @@ class Helper:
             if len(values) < 9:
                 continue
             ident, state, exit_code, submitted, started, ended, name, user, comment = values[:9]
-            if not ident.isdigit() or name != tag or user != owner or comment != tag or (requested is not None and ident not in requested):
+            # Sites without AccountingStoreFlags=job_comment omit the comment
+            # from accounting even though squeue exposes it while the job is
+            # live. The owner, complete UUID name, and known ID still identify
+            # our allocation; a nonempty conflicting comment remains invalid.
+            if not ident.isdigit() or name != tag or user != owner or comment not in {"", tag} or (requested is not None and ident not in requested):
                 continue
             state = state_name(state)
             found[ident] = {"job_id": ident, "cluster": "cluster", "state": state, "exit_code": exit_code, "submitted_at": timestamp(submitted), "started_at": timestamp(started), "ended_at": timestamp(ended), "observed_at": observed, "terminal": state in TERMINAL, "owner": owner, "tag": tag}

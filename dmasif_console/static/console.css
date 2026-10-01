@@ -117,6 +117,7 @@ body > .demo-banner { max-width: 1440px; padding: 24px 40px 0; }
 .detail-heading { align-items: flex-start; margin-bottom: 24px; }
 .detail-heading h1 { font-size: 28px; }
 .detail-heading .status-badge { margin-top: 5px; }
+.status-explanation { margin: -12px 0 20px; }
 .run-identifier { margin-top: 8px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .run-notice { margin-bottom: 20px; padding: 12px 16px; border: 1px solid #eadab9; border-radius: 6px; background: #fff8ea; color: #785617; font-size: 13px; }
 .run-notice p { margin-top: 4px; }

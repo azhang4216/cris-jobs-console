@@ -7,6 +7,7 @@ from dmasif_console.config import Settings
 from dmasif_console.db import Store
 from dmasif_console.worker import Worker
 from dmasif_console.transport import SubmissionUncertain, TransportError
+from dmasif_console.sources import ExperimentConfigError
 
 
 class Adapter:
@@ -86,6 +87,46 @@ def test_submission_unknown_reconciles_after_restart_without_resubmitting(setup)
     restarted.tick()
     assert adapter.submit_count == 1
     assert store.get_run(run_id)["state"] == "QUEUED"
+
+
+def test_rejected_config_keeps_source_and_private_original_without_submitting(setup, monkeypatch):
+    settings, store, adapter, worker = setup
+    run_id = enqueue(settings, store)
+    errors = [{"sample": "experiments/run.yaml.seed", "reason": "Must be an integer from 0 to 4294967295."}]
+
+    def reject(source):
+        raise ExperimentConfigError(errors, "seed: private-value\n")
+
+    monkeypatch.setattr("dmasif_console.worker.read_experiment", reject)
+    worker.tick()
+    run = store.get_run(run_id)
+    assert run["state"] == "REJECTED"
+    assert run["source"]["commit_sha"] == "a" * 40
+    assert run["source"]["sha256"] == "a" * 64
+    assert run["original_config"] == "seed: private-value\n"
+    assert run["validation"] == {"outcome": "REJECTED", "errors": errors}
+    assert "private-value" not in run["reason"]
+    assert not run["capacity_reserved"]
+    assert adapter.stage_count == adapter.submit_count == 0
+    from dmasif_console.web import public_run
+    public = public_run(run, settings)
+    assert "private-value" not in str(public)
+    assert public["provenance"]["source_sha256"] == "a" * 64
+
+
+def test_unknown_dataset_keeps_validated_config_and_explains_rejection(setup, monkeypatch):
+    settings, store, adapter, worker = setup
+    run_id = enqueue(settings, store)
+    config = {"schema_version": 1, "job_type": "dmasif_extract", "dataset_id": "unregistered", "preset_id": "quick-test", "seed": 0, "repeat_id": "one"}
+    monkeypatch.setattr("dmasif_console.worker.read_experiment", lambda source: (config, "dataset_id: unregistered\n"))
+    worker.tick()
+    run = store.get_run(run_id)
+    assert run["state"] == "REJECTED"
+    assert run["config"] == config
+    assert "Unknown dataset_id" in run["reason"]
+    assert "registered ID" in run["reason"]
+    assert run["validation"]["errors"][0]["sample"] == "experiments/run.yaml.dataset_id"
+    assert adapter.stage_count == adapter.submit_count == 0
 
 
 def test_ambiguous_submission_holds_capacity_for_later_push(setup):

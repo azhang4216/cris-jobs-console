@@ -263,8 +263,8 @@
     renderActivity(Array.isArray(data.activity) ? data.activity : []);
   }
 
-  function renderArtifacts(artifacts, source) {
-    const fingerprint = JSON.stringify([artifacts, source]);
+  function renderArtifacts(artifacts, source, noJobSubmitted) {
+    const fingerprint = JSON.stringify([artifacts, source, noJobSubmitted]);
     if (fingerprint === previousArtifacts) return;
     previousArtifacts = fingerprint;
     document.getElementById("artifact-count").textContent = String(artifacts.length);
@@ -279,6 +279,9 @@
         meta.append(document.createTextNode(" · "), checksum);
       }
       info.append(node("strong", "", artifact.name || "Result file"), meta);
+      if (artifact.points !== null && artifact.points !== undefined && artifact.atoms !== null && artifact.atoms !== undefined) {
+        info.append(node("span", "cell-secondary", `${artifact.points} surface points · ${artifact.atoms} atoms`));
+      }
       if (artifact.reason) info.append(node("span", "small-note", artifact.reason));
       row.append(icon, info);
       if (artifact.cached && artifact.id) {
@@ -290,14 +293,14 @@
     });
     if (!elements.length) {
       const empty = node("div", "results-empty");
-      empty.append(node("p", "", source === "slurm" ? "Results have not been imported." : "No results yet."));
+      empty.append(node("p", "", noJobSubmitted ? "No results: no cluster job was submitted." : (source === "slurm" ? "Results have not been imported." : "No results yet.")));
       elements.push(empty);
     }
     replacePreservingFocus(document.getElementById("artifacts-list"), elements);
   }
 
-  function renderJobs(jobs) {
-    const fingerprint = JSON.stringify(jobs);
+  function renderJobs(jobs, noJobSubmitted) {
+    const fingerprint = JSON.stringify([jobs, noJobSubmitted]);
     if (fingerprint === previousJobs) return;
     previousJobs = fingerprint;
     const elements = jobs.map((job) => {
@@ -305,7 +308,7 @@
       item.append(node("strong", "mono", job.job_id || job.slurm_job_id || "Pending"), node("span", "", job.state || job.raw_state || "Unknown"), node("p", "small-note", `Exit code: ${job.exit_code || "Not available"}`));
       return item;
     });
-    if (!elements.length) elements.push(node("p", "small-note jobs-empty", "No cluster job yet."));
+    if (!elements.length) elements.push(node("p", "small-note jobs-empty", noJobSubmitted ? "No cluster job was submitted." : "No cluster job yet."));
     document.getElementById("scheduler-jobs").replaceChildren(...elements);
   }
 
@@ -317,8 +320,11 @@
       const item = node("li");
       const marker = node("span", "event-marker"); marker.setAttribute("aria-hidden", "true");
       const content = node("div");
-      const label = String(event.kind || event.type || event.event_type || "Update").replaceAll("_", " ").toLowerCase();
-      content.append(node("strong", "", label.charAt(0).toUpperCase() + label.slice(1)), node("p", "", readable(event.reason || event.message || event.details)), timeNode(event.created_at || event.timestamp));
+      const kind = String(event.kind || event.type || event.event_type || "Update").replaceAll("_", " ").toLowerCase();
+      const label = Object.hasOwn(labels, event.to)
+        ? `${Object.hasOwn(labels, event.from) ? `${labels[event.from]} → ` : ""}${labels[event.to]}`
+        : (Object.hasOwn(labels, event.state) ? labels[event.state] : kind.charAt(0).toUpperCase() + kind.slice(1));
+      content.append(node("strong", "", label), node("p", "", readable(event.reason || event.message || event.details)), timeNode(event.created_at || event.timestamp));
       item.append(marker, content);
       return item;
     });
@@ -326,12 +332,12 @@
     document.getElementById("events-list").replaceChildren(...elements);
   }
 
-  function renderLogs(text, observedAt, source) {
+  function renderLogs(text, observedAt, source, noJobSubmitted) {
     const output = document.getElementById("log-output");
     const following = document.getElementById("follow-logs").checked;
     const scrollTop = output.scrollTop;
     const scrollLeft = output.scrollLeft;
-    const next = text || (source === "slurm" ? "Logs unavailable for this imported job." : "Waiting for job output…");
+    const next = text || (noJobSubmitted ? "No logs: no cluster job was submitted." : (source === "slurm" ? "Logs unavailable for this imported job." : "Waiting for job output…"));
     if (output.textContent !== next) output.textContent = next;
     output.scrollTop = following ? output.scrollHeight : scrollTop;
     output.scrollLeft = scrollLeft;
@@ -344,6 +350,11 @@
     if (data.status_labels) Object.assign(labels, data.status_labels);
     document.getElementById("detail-status").replaceChildren(statusNode(run.state));
     const needsHelp = attentionStates.has(run.state);
+    const jobs = Array.isArray(data.jobs) ? data.jobs : [];
+    const noJobSubmitted = ["REJECTED", "PREPARATION_FAILED"].includes(run.state) && !run.submitted_at && jobs.length === 0;
+    const explanation = document.getElementById("status-explanation");
+    explanation.hidden = needsHelp || !run.reason;
+    explanation.textContent = run.reason || "";
     const notice = document.getElementById("run-notice");
     notice.hidden = !needsHelp && !run.monitor_error;
     document.getElementById("notice-label").textContent = needsHelp ? "Needs attention" : "Monitoring issue";
@@ -359,10 +370,10 @@
     for (const key of ["validation", "config", "provenance"]) {
       document.getElementById(`${key}-json`).textContent = JSON.stringify(key === "provenance" ? publicProvenance(run[key]) : (run[key] || {}), null, 2);
     }
-    renderArtifacts(Array.isArray(run.artifacts) ? run.artifacts : [], run.source_kind);
-    renderJobs(Array.isArray(data.jobs) ? data.jobs : []);
+    renderArtifacts(Array.isArray(run.artifacts) ? run.artifacts : [], run.source_kind, noJobSubmitted);
+    renderJobs(jobs, noJobSubmitted);
     renderEvents(Array.isArray(data.events) ? data.events : []);
-    if (typeof run.log_tail === "string") renderLogs(run.log_tail, run.last_observed_at, run.source_kind);
+    if (typeof run.log_tail === "string") renderLogs(run.log_tail, run.last_observed_at, run.source_kind, noJobSubmitted);
     // A functioning dashboard API is separate from a recent successful cluster check.
     const observed = parseDate(run.last_observed_at);
     const shouldBeObserved = ["QUEUED", "RUNNING", "SUBMITTING", "SUBMISSION_UNKNOWN", "VALIDATING_RESULTS"].includes(run.state);
@@ -398,7 +409,8 @@
         renderObservation(data.observation);
         if (typeof data.run?.log_tail !== "string") {
           const logs = await getJSON(`/api/runs/${encodeURIComponent(id)}/logs`);
-          renderLogs(logs.text, logs.last_observed_at, data.run.source_kind);
+          const noJobSubmitted = ["REJECTED", "PREPARATION_FAILED"].includes(data.run.state) && !data.run.submitted_at && !data.jobs?.length;
+          renderLogs(logs.text, logs.last_observed_at, data.run.source_kind, noJobSubmitted);
         }
       }
       connection.textContent = "Updates automatically";

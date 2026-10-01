@@ -8,7 +8,7 @@ The first release supports the existing dMaSIF **feature-extraction** interface.
 
 ## Researcher workflow
 
-**Start here: edit these files in the lab's dMaSIF research repository.** This `dmasif-console` repository contains the dashboard and submission service; the operator supplies the research repository URL.
+**Start here: edit these files in [the private dMaSIF research repository](https://github.com/azhang4216/dmasif-experiments).** This `dmasif-console` repository contains the dashboard and submission service. Researchers need access to the research repository and an authorized GitHub account before submitting.
 
 ### What do I change?
 

@@ -1,6 +1,6 @@
 # Install the fixed cluster adapter
 
-This is the operator's future deployment procedure. None of these steps were run during local implementation. They create only the new application root; preserve the existing research checkout, working sandbox, and test outputs.
+Use this procedure to install a managed release in a new application root. Preserve the existing research checkout, working sandbox, and test outputs. The live submission setup and acceptance checks are described in [live-submissions.md](live-submissions.md).
 
 ## Required runtime contract
 
@@ -11,6 +11,10 @@ This is the operator's future deployment procedure. None of these steps were run
 - The extractor must accept the existing arguments, including an absolute `--ckpt` path, and emit the supported 16-dimensional NPZ feature schema. The current adapter does not install dependencies from research commits.
 
 The image and checkpoint must be immutable registered files with known SHA-256 hashes. A mutable sandbox is not an accepted production image. Freeze a new SIF from the tested environment through the site's approved build process; do not assume an older SIF has all sandbox patches.
+
+If the site's Apptainer cannot mount SIF files because squashfuse is unavailable, the operator can set `cluster.runtime_unsquash: true`. This adds Apptainer's `--unsquash` flag after verifying the same pinned SIF checksum; it does not permit a mutable sandbox as the registered runtime. Keep the default `false` where SIF mounting works. This flag belongs in private operator configuration, never in a researcher's `experiments/run.yaml`.
+
+With unpacking enabled, each allocation uses a new private temporary directory under `SLURM_TMPDIR`, or `/tmp` if the scheduler does not set it. Verify on the compute nodes that this root is local disk, has enough free inodes, and can hold the uncompressed image. The runner checks for at least **four times the SIF size plus 1 GiB** free before launching; this is a conservative minimum, not an exact expansion estimate or a reservation. In particular, a RAM-backed `/tmp` may be unsuitable. Allow enough job time for extraction. Results and scientific caches remain in their retained per-job directories; the host's home setting stays unchanged. Temporary unpacked files are removed after ordinary completion, launch errors, or runtime failure. SIGKILL, node loss, or a hard scheduler termination can prevent cleanup, so the site's scheduler scratch-cleanup policy is still needed.
 
 ## Install a versioned helper release
 

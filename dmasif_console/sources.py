@@ -14,6 +14,7 @@ import tempfile
 import time
 
 import yaml
+from pydantic import ValidationError
 
 SHA = re.compile(r"^[0-9a-f]{40}$")
 LFS_MARKER = b"version https://git-lfs.github.com/spec/v1"
@@ -21,6 +22,45 @@ LFS_MARKER = b"version https://git-lfs.github.com/spec/v1"
 
 class SourceError(RuntimeError):
     pass
+
+
+class ExperimentConfigError(SourceError):
+    """Safe public diagnostics plus the original YAML for private retention."""
+
+    def __init__(self, errors: list[dict[str, str]], original_config: str | None = None):
+        self.errors = errors
+        self.original_config = original_config
+        descriptions = [f"{item['sample']}: {item['reason']}" for item in errors]
+        super().__init__("Invalid experiments/run.yaml. " + " ".join(descriptions)
+                         + " No cluster job was submitted.")
+
+
+_FIELD_REQUIREMENTS = {
+    "schema_version": "Must be the integer 1.",
+    "job_type": "Must be dmasif_extract.",
+    "dataset_id": "Must be a string of 1–100 letters, digits, periods, underscores, or hyphens.",
+    "preset_id": "Must be quick-test.",
+    "seed": "Must be an integer from 0 to 4294967295 (without quotes).",
+    "repeat_id": "Must be a string of 1–100 letters, digits, periods, underscores, or hyphens.",
+}
+
+
+class _ExperimentLoader(yaml.SafeLoader):
+    """Reject duplicate YAML keys rather than silently changing a request."""
+
+    def construct_mapping(self, node, deep=False):
+        self.flatten_mapping(node)
+        seen = set()
+        for key_node, _ in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            try:
+                duplicate = key in seen
+                seen.add(key)
+            except TypeError:
+                raise yaml.constructor.ConstructorError(None, None, "Invalid mapping key", key_node.start_mark) from None
+            if duplicate:
+                raise yaml.constructor.ConstructorError(None, None, "Duplicate mapping key", key_node.start_mark)
+        return super().construct_mapping(node, deep=deep)
 
 
 def _git_env() -> dict[str, str]:
@@ -179,7 +219,7 @@ def snapshot_source(settings, commit_sha: str) -> dict:
         source_dir = bundle / "source"
         source_dir.mkdir(parents=True)
         _extract_plain(tar_path, source_dir, settings.max_source_bytes)
-        for required in ("affinity/extract.py", "experiments/run.yaml"):
+        for required in ("affinity/extract.py",):
             if not (source_dir / required).is_file():
                 raise SourceError(f"Commit is missing required file: {required}.")
         archive = bundle / "source.tar.gz"
@@ -196,26 +236,50 @@ def read_experiment(source: dict) -> tuple[dict, str]:
     """Read bounded configuration from the retained archive (not mutable extraction)."""
     from .config import ExperimentConfig
 
+    original = None
     try:
         with tarfile.open(source["archive_path"], "r:gz") as archive:
-            member = archive.getmember("experiments/run.yaml")
+            try:
+                member = archive.getmember("experiments/run.yaml")
+            except KeyError:
+                raise ExperimentConfigError([{"sample": "experiments/run.yaml", "reason": "Required file is missing. Commit this file in the research repository before pushing a run branch."}]) from None
+            if not member.isfile():
+                raise ExperimentConfigError([{"sample": "experiments/run.yaml", "reason": "Must be a regular UTF-8 YAML file."}])
             if member.size > 32768:
-                raise SourceError("Experiment configuration exceeds 32 KiB.")
+                raise ExperimentConfigError([{"sample": "experiments/run.yaml", "reason": "Configuration must be at most 32 KiB."}])
             stream = archive.extractfile(member)
             if stream is None:
-                raise SourceError("Experiment configuration is unreadable.")
+                raise ExperimentConfigError([{"sample": "experiments/run.yaml", "reason": "Configuration file is unreadable."}])
             original = stream.read().decode("utf-8")
-        parsed = yaml.safe_load(original)
+        parsed = yaml.load(original, Loader=_ExperimentLoader)
         if not isinstance(parsed, dict):
-            raise SourceError("experiments/run.yaml must contain a YAML mapping.")
+            raise ExperimentConfigError([{"sample": "experiments/run.yaml", "reason": "Use a YAML mapping of field names to values, not a list or a single value."}], original)
         config = ExperimentConfig.model_validate(parsed)
     except SourceError:
         raise
-    except Exception as exc:
-        # Pydantic errors may echo submitted input. Show safe field paths only.
-        paths = []
-        if hasattr(exc, "errors"):
-            paths = [".".join(str(part) for part in error["loc"]) for error in exc.errors()]
-        suffix = f" Check: {', '.join(paths)}." if paths else ""
-        raise SourceError("Invalid experiments/run.yaml; use the documented extraction schema." + suffix) from exc
+    except ValidationError as exc:
+        errors = []
+        seen = set()
+        for error in exc.errors():
+            field = error["loc"][0] if error["loc"] else None
+            if field in _FIELD_REQUIREMENTS:
+                sample = "experiments/run.yaml." + field
+                reason = ("Required. " if error["type"] == "missing" else "") + _FIELD_REQUIREMENTS[field]
+            else:
+                # Unknown keys and validation messages can contain arbitrary
+                # submitted secrets. Use only fixed schema labels in public.
+                sample = "experiments/run.yaml"
+                reason = "Only schema_version, job_type, dataset_id, preset_id, seed, and repeat_id are accepted; command/script options are not supported."
+            if sample not in seen:
+                errors.append({"sample": sample, "reason": reason})
+                seen.add(sample)
+        raise ExperimentConfigError(errors, original) from exc
+    except yaml.YAMLError as exc:
+        mark = getattr(exc, "problem_mark", None)
+        location = f" at line {mark.line + 1}, column {mark.column + 1}" if mark is not None else ""
+        reason = ("Duplicate YAML fields are not allowed" if getattr(exc, "problem", "") == "Duplicate mapping key"
+                  else "Fix the YAML syntax or unsupported YAML value")
+        raise ExperimentConfigError([{"sample": "experiments/run.yaml", "reason": reason + location + "."}], original) from exc
+    except UnicodeDecodeError as exc:
+        raise ExperimentConfigError([{"sample": "experiments/run.yaml", "reason": "Save this file as UTF-8 text."}]) from exc
     return config.model_dump(), original

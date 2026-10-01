@@ -41,6 +41,7 @@ cluster:
   qos: test
   runtime_image: /srv/lab/job_console/releases/containers/APPROVED.sif
   runtime_sha256: REPLACE_WITH_RUNTIME_SHA256
+  runtime_unsquash: false  # Enable only if the site's Apptainer cannot mount SIFs.
   checkpoint_path: /srv/lab/checkpoints/APPROVED
   checkpoint_sha256: REPLACE_WITH_CHECKPOINT_SHA256
   adapter_version: v1

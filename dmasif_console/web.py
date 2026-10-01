@@ -117,6 +117,7 @@ def public_run(run: dict, settings: Settings) -> dict:
     # Never expose remote paths, source archive locations, module paths, or raw policies.
     result["artifacts"] = [
         {"id": a.get("id"), "name": a.get("name"), "size": a.get("size"), "sha256": a.get("sha256"),
+         "points": a.get("points"), "atoms": a.get("atoms"),
          "cached": a.get("cache_state") == "cached", "reason": a.get("cache_reason", "")}
         for a in run.get("artifacts", [])
     ]
@@ -290,7 +291,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             detail = event["detail"]
             if isinstance(detail, dict) and isinstance(detail.get("detail"), dict):
                 detail = detail["detail"]
-            events.append({"kind": event["kind"], "created_at": event["created_at"],
+            transition = {key: detail[key] for key in ("from", "to", "state")
+                          if isinstance(detail, dict) and isinstance(detail.get(key), str)
+                          and detail[key] in STATUS_LABELS}
+            events.append({"kind": event["kind"], "created_at": event["created_at"], **transition,
                            "reason": detail.get("reason", "") if isinstance(detail, dict) else str(detail)})
         return {"run": public_run(run, settings), "jobs": _redact(jobs, settings, run), "events": _redact(events, settings, run),
                 "status_labels": STATUS_LABELS, "observation": observation_data()}

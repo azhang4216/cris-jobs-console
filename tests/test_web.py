@@ -286,3 +286,53 @@ def test_terminal_unknown_end_time_does_not_invent_runtime(client, settings):
     data = client.get("/api/runs/" + run_id).json()
     assert data["run"]["runtime_seconds"] is None
     assert data["events"][0]["reason"] == "Scheduler failed; end time unavailable."
+
+
+def test_detail_retains_observed_state_transitions_and_queue_reason(client, settings):
+    run_id = signed(client, settings).json()["run_id"]
+    store = Store(settings.database_path)
+    store.update_run(run_id, {"state": "QUEUED", "reason": "Waiting for an available GPU."})
+    queued = client.get("/runs/" + run_id).text
+    assert 'id="status-explanation" >Waiting for an available GPU.' in queued
+    store.update_run(run_id, {"state": "RUNNING", "reason": "Running on the cluster."})
+    store.update_run(run_id, {"state": "SUCCEEDED", "reason": "Every expected output passed validation."})
+    data = client.get("/api/runs/" + run_id).json()
+    transitions = [(event.get("from"), event.get("to")) for event in data["events"] if "to" in event]
+    assert transitions == [("RUNNING", "SUCCEEDED"), ("QUEUED", "RUNNING"), ("CHECKING_REQUEST", "QUEUED")]
+    page = client.get("/runs/" + run_id).text
+    assert "Queued on cluster → Running" in page
+    assert "Running → Succeeded" in page
+
+
+@pytest.mark.parametrize("state", ["REJECTED", "PREPARATION_FAILED"])
+def test_failed_request_has_actionable_reason_and_no_pending_output(client, settings, state):
+    run_id = signed(client, settings).json()["run_id"]
+    store = Store(settings.database_path)
+    store.update_run(run_id, {
+        "state": state, "reason": "experiments/run.yaml.seed: Must be an integer from 0 to 4294967295.",
+        "validation": {"outcome": "REJECTED", "errors": [
+            {"sample": "experiments/run.yaml.seed", "reason": "Must be an integer from 0 to 4294967295."}]},
+        "original_config": "private raw configuration must never be published",
+    })
+    page = client.get("/runs/" + run_id).text
+    assert "experiments/run.yaml.seed: Must be an integer" in page
+    assert "No logs: no cluster job was submitted." in page
+    assert "No results: no cluster job was submitted." in page
+    assert "Waiting for job output" not in page
+    data = client.get("/api/runs/" + run_id).json()
+    assert data["jobs"] == []
+    assert data["run"]["validation"]["errors"][0]["sample"] == "experiments/run.yaml.seed"
+    assert "private raw configuration" not in json.dumps(data)
+
+
+def test_result_dimensions_are_visible_without_private_manifest_paths(client, settings):
+    run_id = signed(client, settings).json()["run_id"]
+    store = Store(settings.database_path)
+    store.update_run(run_id, {"state": "SUCCEEDED", "artifacts": [
+        {"id": "d" * 64, "name": "1STP.npz", "size": 1234, "sha256": "e" * 64,
+         "points": 6543, "atoms": 1234, "relative_path": "private-manifest-path", "cache_state": "cached"}]})
+    artifact = client.get("/api/runs/" + run_id).json()["run"]["artifacts"][0]
+    assert (artifact["points"], artifact["atoms"]) == (6543, 1234)
+    page = client.get("/runs/" + run_id).text
+    assert "6543 surface points · 1234 atoms" in page
+    assert "private-manifest-path" not in page

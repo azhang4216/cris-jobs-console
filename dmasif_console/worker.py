@@ -11,7 +11,7 @@ import time
 
 from .db import Store
 from .backups import AutomaticBackups
-from .sources import SourceError, read_experiment, sha256_file, snapshot_source
+from .sources import ExperimentConfigError, SourceError, read_experiment, sha256_file, snapshot_source
 from .transport import PreparationError, SubmissionUncertain, get_adapter
 
 ACTIVE = {"PREPARING", "SUBMITTING", "SUBMISSION_UNKNOWN", "QUEUED", "RUNNING", "VALIDATING_RESULTS", "NEEDS_REVIEW"}
@@ -121,11 +121,16 @@ class Worker:
             policy = run.get("policy") or self.settings.policy_snapshot()
             acquisition = self.settings.model_copy(update={"repository": RepositoryConfig.model_validate(policy.get("repository", self.settings.repository.model_dump()))})
             source = snapshot_source(acquisition, run["commit_sha"])
+            # Rejected requests still retain their exact source identity. This
+            # also lets backup/restore preserve the source of a bad request.
+            run = self._update(run, source=source)
             config, original = read_experiment(source)
+            run = self._update(run, config=config, original_config=original)
             policy = run.get("policy") or self.settings.policy_snapshot()
             datasets, presets = policy["datasets"], policy["presets"]
             if config["dataset_id"] not in datasets:
-                raise SourceError("Unknown dataset_id; select an operator-approved immutable dataset.")
+                raise ExperimentConfigError([{"sample": "experiments/run.yaml.dataset_id",
+                                              "reason": "Unknown dataset_id. Select an operator-approved immutable dataset; ask the lab operator for its registered ID."}], original)
             if config["preset_id"] not in presets:
                 raise SourceError("Unknown preset_id; select an operator-approved resource preset.")
             if config["preset_id"] != "quick-test":
@@ -134,6 +139,14 @@ class Worker:
             self._update(run, source=source, config=config, original_config=original, resolved=resolved,
                          state="WAITING_FOR_CAPACITY", capacity_reserved=False,
                          reason="Validated request; waiting for the application submission slot.")
+        except ExperimentConfigError as exc:
+            patch = {"state": "REJECTED", "capacity_reserved": False, "reason": str(exc),
+                     "validation": {"outcome": "REJECTED", "errors": exc.errors}}
+            if exc.original_config is not None:
+                # Original YAML is private operator evidence. Public responses
+                # expose only the fixed diagnostics, never this raw string.
+                patch["original_config"] = exc.original_config
+            self._update(run, **patch)
         except SourceError as exc:
             text = str(exc)
             rejection = "experiments/run.yaml" in text or "dataset_id" in text or "preset" in text

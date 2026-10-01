@@ -82,6 +82,7 @@ class ClusterConfig(StrictModel):
     wall_minutes: int = 15
     runtime_image: str = ""
     runtime_sha256: str = ""
+    runtime_unsquash: bool = Field(default=False, strict=True)
     checkpoint_path: str = ""
     checkpoint_sha256: str = ""
     adapter_version: str = "v1"
@@ -120,6 +121,14 @@ class ExperimentConfig(StrictModel):
     preset_id: Literal["quick-test"] = "quick-test"
     seed: int = Field(default=0, ge=0, le=2**32 - 1)
     repeat_id: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_.-]+$")
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def integer_schema_version(cls, value):
+        # Literal[1] also matches True and 1.0, even under strict validation.
+        if type(value) is not int:
+            raise ValueError("schema_version must be the integer 1")
+        return value
 
 
 class Settings(StrictModel):

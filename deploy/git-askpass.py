@@ -1,4 +1,4 @@
-#!/usr/local/bin/python
+#!/usr/bin/env python3
 """Fixed Git credential helper. Only the worker mounts the repository token."""
 
 import os

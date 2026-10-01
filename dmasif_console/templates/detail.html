@@ -4,12 +4,14 @@
 {% block page %}detail{% endblock %}
 {% block content %}
 {% set needs_help = run.get('state') in ['SUBMISSION_UNKNOWN', 'NEEDS_REVIEW', 'PREPARATION_FAILED', 'REJECTED', 'PARTIAL', 'FAILED', 'TIMED_OUT'] %}
+{% set no_job_submitted = run.get('state') in ['REJECTED', 'PREPARATION_FAILED'] and not run.get('submitted_at') and not jobs %}
 <div id="run-detail" data-run-id="{{ run.get('id') }}">
   <a href="/" class="back-link"><span aria-hidden="true">←</span> All runs</a>
   <section class="page-heading detail-heading">
     <h1>{{ run.get('experiment') or 'Run details' }}</h1>
     <div id="detail-status">{{ status_badge(run.get('state', 'CHECKING_REQUEST'), status_labels) }}</div>
   </section>
+  <p class="small-note status-explanation" id="status-explanation" {% if needs_help or not run.get('reason') %}hidden{% endif %}>{{ run.get('reason') or '' }}</p>
   {% if run.get('source_kind') == 'slurm' %}<p class="small-note imported-note">Imported from Slurm. Researcher, commit, and dataset are unavailable. Scheduler completion does not verify results.</p>{% endif %}
 
   <div class="run-notice" id="run-notice" {% if not needs_help and not run.get('monitor_error') %}hidden{% endif %}>
@@ -38,11 +40,12 @@
             <div class="artifact-info">
               <strong>{{ artifact.get('name') or 'Result file' }}</strong>
               <span class="cell-secondary"><span data-bytes="{{ artifact.get('size', 0) }}">{{ artifact.get('size', 0) }} bytes</span>{% if artifact.get('sha256') %} · <span class="mono" title="SHA-256: {{ artifact.get('sha256') }}">{{ artifact.get('sha256')[:12] }}</span>{% endif %}</span>
+              {% if artifact.get('points') is not none and artifact.get('atoms') is not none %}<span class="cell-secondary">{{ artifact.get('points') }} surface points · {{ artifact.get('atoms') }} atoms</span>{% endif %}
               {% if artifact.get('reason') %}<span class="small-note">{{ artifact.get('reason') }}</span>{% endif %}
             </div>
             {% if artifact.get('cached') and artifact.get('id') %}<a class="download-link" href="{{ settings.get('api_base_url', '') }}/artifacts/{{ artifact.get('id') }}">Download <span aria-hidden="true">↓</span></a>{% else %}<span class="download-unavailable">Download unavailable</span>{% endif %}
           </div>
-          {% else %}<div class="results-empty"><p>{{ 'Results have not been imported.' if run.get('source_kind') == 'slurm' else 'No results yet.' }}</p></div>{% endfor %}
+          {% else %}<div class="results-empty"><p>{{ 'No results: no cluster job was submitted.' if no_job_submitted else ('Results have not been imported.' if run.get('source_kind') == 'slurm' else 'No results yet.') }}</p></div>{% endfor %}
         </div>
         <details class="detail-disclosure"><summary>Validation</summary><pre class="json-block" id="validation-json">{{ run.get('validation', {})|tojson(indent=2) }}</pre></details>
       </section>
@@ -50,14 +53,14 @@
       <section class="panel logs-panel" aria-labelledby="logs-title">
         <div class="panel-heading"><h2 id="logs-title">Logs</h2><label class="follow-toggle"><input type="checkbox" id="follow-logs" checked> Follow output</label></div>
         <div class="log-toolbar"><span>stdout + stderr</span><span id="log-observed">Updated {{ timestamp(run.get('last_observed_at')) }}</span></div>
-        <pre class="log-output" id="log-output" tabindex="0" aria-label="Recent job log output">{{ run.get('log_tail') or ('Logs unavailable for this imported job.' if run.get('source_kind') == 'slurm' else 'Waiting for job output…') }}</pre>
+        <pre class="log-output" id="log-output" tabindex="0" aria-label="Recent job log output">{{ run.get('log_tail') or ('No logs: no cluster job was submitted.' if no_job_submitted else ('Logs unavailable for this imported job.' if run.get('source_kind') == 'slurm' else 'Waiting for job output…')) }}</pre>
       </section>
 
       <details class="panel technical-details">
         <summary>Run activity</summary>
         <ol class="events-list" id="events-list">
           {% for event in events %}
-          <li><span class="event-marker" aria-hidden="true"></span><div><strong>{{ (event.get('kind') or event.get('type') or event.get('event_type') or 'Update')|replace('_', ' ')|capitalize }}</strong><p>{{ event.get('reason') or event.get('message') or event.get('details') or '' }}</p>{{ timestamp(event.get('created_at') or event.get('timestamp')) }}</div></li>
+          <li><span class="event-marker" aria-hidden="true"></span><div><strong>{% if event.get('to') in status_labels %}{% if event.get('from') in status_labels %}{{ status_labels[event.get('from')] }} → {% endif %}{{ status_labels[event.get('to')] }}{% elif event.get('state') in status_labels %}{{ status_labels[event.get('state')] }}{% else %}{{ (event.get('kind') or event.get('type') or event.get('event_type') or 'Update')|replace('_', ' ')|capitalize }}{% endif %}</strong><p>{{ event.get('reason') or event.get('message') or event.get('details') or '' }}</p>{{ timestamp(event.get('created_at') or event.get('timestamp')) }}</div></li>
           {% else %}<li class="activity-empty">No updates yet.</li>{% endfor %}
         </ol>
       </details>
@@ -86,7 +89,7 @@
         </dl>
         <div class="panel-heading"><h2>Cluster jobs</h2></div>
         <div id="scheduler-jobs" class="jobs-list">
-          {% for job in jobs %}<div class="scheduler-job"><strong class="mono">{{ job.get('job_id') or job.get('slurm_job_id') or 'Pending' }}</strong><span>{{ job.get('state') or job.get('raw_state') or 'Unknown' }}</span><p class="small-note">Exit code: {{ job.get('exit_code') or 'Not available' }}</p></div>{% else %}<p class="small-note jobs-empty">No cluster job yet.</p>{% endfor %}
+          {% for job in jobs %}<div class="scheduler-job"><strong class="mono">{{ job.get('job_id') or job.get('slurm_job_id') or 'Pending' }}</strong><span>{{ job.get('state') or job.get('raw_state') or 'Unknown' }}</span><p class="small-note">Exit code: {{ job.get('exit_code') or 'Not available' }}</p></div>{% else %}<p class="small-note jobs-empty">{{ 'No cluster job was submitted.' if no_job_submitted else 'No cluster job yet.' }}</p>{% endfor %}
         </div>
       </details>
 

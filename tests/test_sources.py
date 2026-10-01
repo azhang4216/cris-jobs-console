@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from dmasif_console.sources import SourceError, read_experiment, snapshot_source
+from dmasif_console.sources import ExperimentConfigError, SourceError, read_experiment, snapshot_source
 
 
 def git(repo, *args):
@@ -85,4 +85,41 @@ def test_yaml_cannot_choose_commands(source_repo):
     git(repo, "commit", "-qm", "unsupported command")
     snapshot = snapshot_source(settings, git(repo, "rev-parse", "HEAD"))
     with pytest.raises(SourceError, match="command"):
+        read_experiment(snapshot)
+
+
+@pytest.mark.parametrize(("config", "expected"), [
+    ("dataset_id: demo\nrepeat_id: first\nschema_version: true\n", "schema_version: Must be the integer 1"),
+    ("dataset_id: demo\nrepeat_id: first\nschema_version: 1.0\n", "schema_version: Must be the integer 1"),
+    ("dataset_id: demo\nrepeat_id: first\nseed: -1\n", "integer from 0 to 4294967295"),
+    ("dataset_id: demo\nrepeat_id: first\nseed: 'private-value'\n", "integer from 0 to 4294967295"),
+    ("dataset_id: demo\nrepeat_id: first\njob_type: private-value\n", "Must be dmasif_extract"),
+    ("dataset_id: demo\n", "repeat_id: Required"),
+    ("dataset_id: demo\nrepeat_id: first\nprivate-value: private-value\n", "Only schema_version"),
+    ("dataset_id: demo\nrepeat_id: first\nseed: [private-value\n", "line 4, column 1"),
+    ("dataset_id: demo\nrepeat_id: first\nseed: 0\nseed: 1\n", "Duplicate YAML fields"),
+    ("- private-value\n", "Use a YAML mapping"),
+])
+def test_invalid_yaml_gives_actionable_safe_diagnostics_and_retains_original(source_repo, config, expected):
+    repo, settings = source_repo
+    (repo / "experiments/run.yaml").write_text(config)
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "invalid request")
+    snapshot = snapshot_source(settings, git(repo, "rev-parse", "HEAD"))
+    with pytest.raises(ExperimentConfigError) as caught:
+        read_experiment(snapshot)
+    assert expected in str(caught.value)
+    assert "private-value" not in str(caught.value)
+    assert "private-value" not in str(caught.value.errors)
+    assert caught.value.original_config == config
+
+
+def test_missing_config_is_a_rejected_request_with_a_retained_source(source_repo):
+    repo, settings = source_repo
+    (repo / "experiments/run.yaml").unlink()
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "missing request")
+    snapshot = snapshot_source(settings, git(repo, "rev-parse", "HEAD"))
+    assert Path(snapshot["archive_path"]).is_file()
+    with pytest.raises(ExperimentConfigError, match="Required file is missing"):
         read_experiment(snapshot)

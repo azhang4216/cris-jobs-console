@@ -73,6 +73,9 @@ class Helper:
         run, source = payload["run"], payload["source"]
         directory = self.directory(run["id"])
         cluster = run["resolved"]["cluster"]
+        unsquash = cluster.get("runtime_unsquash", False)
+        if type(unsquash) is not bool:
+            raise AdapterError("runtime_unsquash must be an operator-configured boolean")
         source_hash = digest(source["sha256"])
         limits = payload.get("limits", {})
         source_limit = int(limits.get("max_source_bytes", 50 * 1024 * 1024))
@@ -179,7 +182,7 @@ class Helper:
             if sha256_file(adapter / name) != checksum:
                 raise AdapterError("Pinned adapter changed")
         provenance = {"source_sha256": source_hash, "commit_sha": source["commit_sha"], "runtime_sha256": cluster["runtime_sha256"], "checkpoint_sha256": cluster["checkpoint_sha256"], "adapter_sha256": adapter_hash, "adapter_version": cluster.get("adapter_version", "1.0.0"), "inputs": manifest}
-        stage = {"remote_dir": str(directory), "source_dir": str(source_root / "tree"), "adapter_dir": str(adapter), "runtime_image": str(runtime), "checkpoint_path": str(checkpoint), "provenance": provenance}
+        stage = {"remote_dir": str(directory), "source_dir": str(source_root / "tree"), "adapter_dir": str(adapter), "runtime_image": str(runtime), "runtime_unsquash": unsquash, "checkpoint_path": str(checkpoint), "provenance": provenance}
         (directory / "logs").mkdir(exist_ok=True)
         (directory / "jobs").mkdir(exist_ok=True)
         (directory / "submit.sbatch").write_text(self.batch_script(directory, adapter, cluster))
@@ -245,10 +248,16 @@ class Helper:
         start = intent["created_at"][:19]
         accounting = ["sacct", "--noheader", "--parsable2", "--allocations", "--user=" + owner, "--starttime=" + start, "--format=JobIDRaw,State,ExitCode,Submit,Start,End,JobName%100,User%100,Comment%100"]
         queue = ["squeue", "--noheader", "--user=" + owner, "--format=%i|%T|%V|%S|%j|%u|%k|%r"]
+        requested = None
         if ids:
-            joined = ",".join(job_id(value) for value in ids)
+            valid_ids = [job_id(value) for value in ids]
+            requested = set(valid_ids)
+            joined = ",".join(valid_ids)
             accounting.append("--jobs=" + joined)
-            queue.append("--jobs=" + joined)
+        # Finished jobs leave squeue before their accounting record expires.
+        # squeue --jobs then fails with "Invalid job id specified", even when
+        # sacct conclusively reports completion. Query this owner's live queue
+        # and filter IDs below; genuine command failures still propagate.
         observed, found = utcnow(), {}
         # Accounting errors are deliberately not treated as an empty completed queue.
         for line in self.command(accounting).splitlines():
@@ -256,7 +265,7 @@ class Helper:
             if len(values) < 9:
                 continue
             ident, state, exit_code, submitted, started, ended, name, user, comment = values[:9]
-            if not ident.isdigit() or name != tag or user != owner or comment != tag:
+            if not ident.isdigit() or name != tag or user != owner or comment != tag or (requested is not None and ident not in requested):
                 continue
             state = state_name(state)
             found[ident] = {"job_id": ident, "cluster": "cluster", "state": state, "exit_code": exit_code, "submitted_at": timestamp(submitted), "started_at": timestamp(started), "ended_at": timestamp(ended), "observed_at": observed, "terminal": state in TERMINAL, "owner": owner, "tag": tag}
@@ -265,7 +274,7 @@ class Helper:
             if len(values) < 8:
                 continue
             ident, state, submitted, started, name, user, comment, reason = values[:8]
-            if not ident.isdigit() or name != tag or user != owner or comment != tag:
+            if not ident.isdigit() or name != tag or user != owner or comment != tag or (requested is not None and ident not in requested):
                 continue
             # A live observation supersedes delayed terminal accounting.
             found[ident] = {"job_id": ident, "cluster": "cluster", "state": state_name(state), "exit_code": None, "submitted_at": timestamp(submitted), "started_at": timestamp(started) if state_name(state) == "RUNNING" else None, "ended_at": None, "observed_at": observed, "terminal": False, "owner": owner, "tag": tag, "reason": reason}

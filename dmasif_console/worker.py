@@ -184,6 +184,18 @@ class Worker:
             self.store.upsert_job(run["id"], job)
         # Include every previously associated job; an omitted job is not proof it ended.
         all_jobs = self.store.jobs(run["id"])
+        for job in all_jobs:
+            warning = job.get("submission_warning")
+            if not isinstance(warning, str) or not warning.strip():
+                continue
+            warning = warning.encode("utf-8")[:16 * 1024].decode("utf-8", errors="ignore")
+            fingerprint = hashlib.sha256(f"{job['job_id']}:{warning}".encode()).hexdigest()
+            seen = run.get("submission_warning_hashes", [])
+            if fingerprint not in seen:
+                # Marker and event commit together. Raw warning evidence stays
+                # private; the existing public event projection redacts it.
+                run = self.store.update_run(run["id"], {"submission_warning_hashes": [*seen, fingerprint]},
+                                            event={"kind": "SUBMISSION_WARNING", "detail": {"reason": "Slurm submission warning: " + warning}})
         patch = {"last_checked_at": now(), "monitor_error": None,
                  "submitted_at": run.get("submitted_at") or next((j.get("submitted_at") for j in jobs if j.get("submitted_at")), None)}
         starts = [j["started_at"] for j in all_jobs if j.get("started_at")]

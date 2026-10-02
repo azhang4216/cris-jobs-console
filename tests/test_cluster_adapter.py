@@ -121,6 +121,49 @@ def test_receipt_persists_and_duplicate_submit_recovers(tmp_path):
     assert "--no-requeue" in calls[0] and "--open-mode=append" in calls[0]
 
 
+def test_successful_submission_warning_is_durable_and_recovers_without_resubmitting(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from cluster_adapter import helper as helper_module
+
+    helper, ident, directory = staged_helper(tmp_path)
+    warning = "Requested GPU type was routed to another GPU type by site policy."
+    calls = []
+
+    def execute(argv, **_):
+        calls.append(argv)
+        if argv[0] == "sbatch":
+            return SimpleNamespace(returncode=0, stdout="123;testcluster\n", stderr=warning + "\n")
+        if argv[0] == "sacct":
+            intent = read_json(directory / "submission-intent.json")
+            return SimpleNamespace(returncode=0, stdout=f"123|FAILED|1:0|2026-01-01T00:00:00|2026-01-01T00:01:00|2026-01-01T00:02:00|{intent['tag']}|{intent['owner']}|\n", stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(helper_module.subprocess, "run", execute)
+    submitted = helper.submit({"run_id": ident})
+    assert submitted[0]["submission_warning"] == warning
+    receipt_path = directory / "submission-receipt.json"
+    assert read_json(receipt_path)["submission_warning"] == warning
+    assert receipt_path.stat().st_mode & 0o777 == 0o600
+    assert helper.submit({"run_id": ident}) == submitted
+    recovered = helper.reconcile({"run_id": ident})
+    assert recovered[0]["submission_warning"] == warning
+    assert recovered[0]["state"] == "FAILED" and recovered[0]["terminal"] is True
+    assert sum(argv[0] == "sbatch" for argv in calls) == 1
+
+
+def test_successful_submission_warning_has_a_bounded_receipt(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from cluster_adapter import helper as helper_module
+
+    helper, ident, _ = staged_helper(tmp_path)
+    monkeypatch.setattr(helper_module.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(
+        returncode=0, stdout="123\n", stderr="Routing warning: " + "é" * 20000))
+    warning = helper.submit({"run_id": ident})[0]["submission_warning"]
+    assert warning.startswith("Routing warning:")
+    assert warning.endswith("[warning truncated]")
+    assert len(warning.encode("utf-8")) <= 16 * 1024
+
+
 def test_reconciliation_matches_owner_full_tag_and_records_duplicates(tmp_path):
     helper, ident, directory = staged_helper(tmp_path)
     tag = "dm-" + ident
@@ -321,6 +364,7 @@ def test_batch_uses_pinned_sif_with_optional_unpack_and_private_scratch(monkeypa
 
     directory, runtime = batch_fixture(tmp_path, unsquash)
     monkeypatch.setattr(sys, "argv", ["batch.py", str(directory), "10"])
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
     host_home = os.environ.get("HOME")
     monkeypatch.setenv("TMPDIR", "/shared/tmp")
     monkeypatch.setenv("APPTAINER_TMPDIR", "/shared/apptainer-tmp")
@@ -388,6 +432,7 @@ def test_unpack_scratch_is_removed_when_runtime_fails(monkeypatch, tmp_path, fai
     from cluster_adapter import batch
 
     directory, _ = batch_fixture(tmp_path, True)
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
     root = tmp_path / "node-local"
     root.mkdir()
     sentinel = root / "other-job-data"

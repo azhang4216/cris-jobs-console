@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -14,6 +15,28 @@ try:
     from .common import AdapterError, claim, contained, job_id, read_json, sha256_file, utcnow, verify_tree, write_json
 except ImportError:
     from common import AdapterError, claim, contained, job_id, read_json, sha256_file, utcnow, verify_tree, write_json
+
+
+def cuda_environment(expected_count: int = 1) -> dict[str, str]:
+    """Validate exactly the devices assigned by Slurm, never invent host IDs."""
+    if type(expected_count) is not int or expected_count not in (1, 2):
+        raise AdapterError("GPU allocation count must be one or two")
+    mask = os.environ.get("CUDA_VISIBLE_DEVICES")
+    uuid = r"GPU-[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}"
+    devices = mask.split(",") if isinstance(mask, str) and len(mask) <= 100 * expected_count else []
+    if (len(devices) != expected_count
+            or any(re.fullmatch(r"(?:[0-9]+|" + uuid + r")", device) is None or len(device) > 100 for device in devices)):
+        raise AdapterError("CUDA_VISIBLE_DEVICES must contain exactly the requested number of numeric GPU IDs or full GPU UUIDs; missing and MIG allocations are unsupported")
+    identities = [str(int(device)) if device.isdecimal() else device.lower() for device in devices]
+    if len(set(identities)) != expected_count or len({device.isdecimal() for device in devices}) != 1:
+        raise AdapterError("CUDA_VISIBLE_DEVICES must contain distinct GPU IDs of one format")
+    result = {"CUDA_VISIBLE_DEVICES": mask}
+    order = os.environ.get("CUDA_DEVICE_ORDER")
+    if order is not None:
+        if order not in {"PCI_BUS_ID", "FASTEST_FIRST"}:
+            raise AdapterError("CUDA_DEVICE_ORDER must be PCI_BUS_ID or FASTEST_FIRST when set")
+        result["CUDA_DEVICE_ORDER"] = order
+    return result
 
 
 @contextmanager
@@ -72,6 +95,13 @@ def main() -> int:
 def _execute(directory: Path, ident: str, stage: dict, unsquash: bool, scratch: Path) -> int:
     job = directory / "jobs" / ident
     source, adapter = Path(stage["source_dir"]), Path(stage["adapter_dir"])
+    requested_count = stage.get("provenance", {}).get("requested_gpu_count", 1)
+    cuda = cuda_environment(requested_count)
+    allocated_mask = cuda["CUDA_VISIBLE_DEVICES"]
+    # This extractor is single-device. A larger operator-approved reservation
+    # does not imply multi-GPU training; choose only within Slurm's allocation.
+    cuda["CUDA_VISIBLE_DEVICES"] = allocated_mask.split(",")[0]
+    cuda_arguments = [part for name, value in cuda.items() for part in ("--env", f"{name}={value}")]
     environment = {key: value for key, value in os.environ.items() if key != "PYTHONPATH" and not key.startswith(("APPTAINERENV_", "SINGULARITYENV_"))}
     # These paths belong to this allocation, including temporary SIF extraction
     # for sites without squashfuse. Never inherit a shared host scratch/cache.
@@ -80,7 +110,8 @@ def _execute(directory: Path, ident: str, stage: dict, unsquash: bool, scratch: 
                        APPTAINER_CACHEDIR=str(job / "apptainer_cache"),
                        SINGULARITY_CACHEDIR=str(job / "apptainer_cache"))
     version = subprocess.run(["apptainer", "--version"], capture_output=True, text=True, timeout=15, check=True, env=environment).stdout.strip()
-    write_json(job / "execution.json", {"job_id": ident, "started_at": utcnow(), "apptainer_version": version, "runtime_unsquash": unsquash, "provenance": stage["provenance"]}, exclusive=True)
+    write_json(job / "execution.json", {"job_id": ident, "started_at": utcnow(), "apptainer_version": version, "runtime_unsquash": unsquash, "cuda_visible_devices": cuda["CUDA_VISIBLE_DEVICES"], "cuda_device_order": cuda.get("CUDA_DEVICE_ORDER"), "allocated_cuda_visible_devices": allocated_mask, "requested_gpu_count": requested_count, "allocated_gpu_count": len(allocated_mask.split(",")), "used_gpu_count": 1, "provenance": stage["provenance"]}, exclusive=True)
+    print(f"GPU allocation: {requested_count} requested, {len(allocated_mask.split(','))} assigned; extraction uses 1 GPU.", flush=True)
     # The run remains writable. Scientific source and deployed adapter are bound
     # read-only; this guards mistakes, not hostile code sharing the Unix account.
     command = [
@@ -89,6 +120,7 @@ def _execute(directory: Path, ident: str, stage: dict, unsquash: bool, scratch: 
         "--bind", f"{directory}:/run:rw", "--bind", f"{stage['checkpoint_path']}:/checkpoint/model.pt:ro",
         "--pwd", "/source", "--env", "PYTHONNOUSERSITE=1", "--env", "PYTHONDONTWRITEBYTECODE=1",
         "--env", "PYTHONUNBUFFERED=1", "--env", "PYTHONPATH=/source:/source/affinity",
+        *cuda_arguments,
         "--env", f"HOME=/run/jobs/{ident}/tmp/home", "--env", f"TMPDIR=/run/jobs/{ident}/tmp",
         "--env", f"KEOPS_CACHE_FOLDER=/run/jobs/{ident}/keops_cache",
         "--env", f"XDG_CACHE_HOME=/run/jobs/{ident}/cache", "--env", f"TORCH_HOME=/run/jobs/{ident}/torch_cache",

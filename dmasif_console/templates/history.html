@@ -10,11 +10,6 @@
   <a class="primary-button" href="{{ settings.get('instructions_url') }}" target="_blank" rel="noopener noreferrer" title="Open job-submission instructions in the README">How to run an experiment <span aria-hidden="true">↗</span></a>
   {% endif %}
 </section>
-{% set submission_control = control|default({}) %}
-<div class="run-notice" id="submission-notice" {% if not submission_control.get('paused') %}hidden{% endif %}>
-  <strong>New submissions paused.</strong>
-  <p id="submission-pause-reason" {% if not submission_control.get('reason') %}hidden{% endif %}>{{ submission_control.get('reason') or '' }}</p>
-</div>
 <section class="panel history-panel" aria-label="Runs">
   <form class="filter-bar" method="get" action="/" id="run-filters" aria-label="Filter runs">
     <label class="search-field"><span class="sr-only">Search experiment</span><svg width="17" height="17" viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" stroke-width="1.5"/><path d="m13 13 4 4" stroke="currentColor" stroke-width="1.5"/></svg><input type="search" name="experiment" placeholder="Search experiments" value="{{ filters.get('experiment', '') }}" autocomplete="off"></label>

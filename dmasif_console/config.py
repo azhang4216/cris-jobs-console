@@ -58,7 +58,7 @@ class DatasetConfig(StrictModel):
 
 
 class PresetConfig(StrictModel):
-    gpus: Literal[1] = 1
+    gpus: int = Field(default=1, strict=True, ge=1, le=2)
     cpus: int = Field(default=8, ge=1, le=8)
     memory_gb: int = Field(default=64, ge=1, le=64)
     wall_minutes: int = Field(default=15, ge=1, le=15)
@@ -172,6 +172,10 @@ class Settings(StrictModel):
             raise ValueError("allowed actors must be positive numeric GitHub IDs")
         if set(self.presets) != {"quick-test"}:
             raise ValueError("v1 supports the quick-test preset only")
+        if self.presets["quick-test"].gpus == 2 and self.cluster.gpu_type not in {
+            "nvidia_h100_80gb_hbm3", "nvidia_h200",
+        }:
+            raise ValueError("Two-GPU allocation requires an explicit supported H100/H200 GPU type")
         if self.mode == "observe":
             if self.submissions_enabled:
                 raise ValueError("Observe mode is read-only; submissions_enabled must be false")

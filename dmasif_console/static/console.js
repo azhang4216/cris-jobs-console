@@ -44,7 +44,7 @@
 
   function publicProvenance(value) {
     const source = value || {};
-    const keys = ["source_commit", "source_sha256", "archive_sha256", "runtime_sha256", "checkpoint_sha256", "adapter_version", "adapter_sha256", "input_manifest_sha256", "dataset_id", "seed", "gpu_type", "gpu_name", "python", "torch", "cuda_runtime", "feature_dimensions", "commit_author", "commit_committer"];
+    const keys = ["source_commit", "source_sha256", "archive_sha256", "runtime_sha256", "checkpoint_sha256", "adapter_version", "adapter_sha256", "input_manifest_sha256", "dataset_id", "seed", "gpu_type", "gpu_name", "requested_gpu_count", "allocated_gpu_count", "used_gpu_count", "python", "torch", "cuda_runtime", "feature_dimensions", "commit_author", "commit_committer"];
     return Object.fromEntries(keys.filter((key) => Object.hasOwn(source, key)).map((key) => [key, source[key]]));
   }
 
@@ -288,11 +288,6 @@
     if (!Array.isArray(data.runs)) throw new Error("Invalid runs response");
     if (data.status_labels) Object.assign(labels, data.status_labels);
     latestRuns = data.runs;
-    const control = data.control || {};
-    document.getElementById("submission-notice").hidden = !control.paused;
-    const pauseReason = document.getElementById("submission-pause-reason");
-    pauseReason.textContent = control.reason || "";
-    pauseReason.hidden = !control.reason;
     updateActorOptions(latestRuns, data.actors);
     const fingerprint = JSON.stringify(latestRuns);
     if (fingerprint !== previousRuns) {

@@ -24,6 +24,9 @@ datasets:
         chains: null
 presets:
   quick-test:
+    # Operator-only integer 1 or 2; default 1. Extraction still uses one GPU.
+    # 2 requires gpu_type nvidia_h100_80gb_hbm3 or nvidia_h200 and explicit approval.
+    # The passed October 2 test used 2; its one-off approval does not enable future runs.
     gpus: 1
     cpus: 8
     memory_gb: 64
@@ -40,7 +43,7 @@ cluster:
   partition: gpu
   # Operator-only: use the site's exact GRES type for the tested runtime.
   # null permits any GPU model; it does not guarantee runtime compatibility.
-  gpu_type: nvidia_h100_80gb_hbm3  # Example H100 type; verify at your site.
+  gpu_type: nvidia_h100_80gb_hbm3  # Request only; verify actual allocation and site routing policy.
   qos: test
   runtime_image: /srv/lab/job_console/releases/containers/APPROVED.sif
   runtime_sha256: REPLACE_WITH_RUNTIME_SHA256

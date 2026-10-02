@@ -1,4 +1,4 @@
-# dMaSIF console — dashboard and infrastructure
+# cris-jobs-console — dashboard and infrastructure
 
 > [!IMPORTANT]
 > **Do not push experiment code, experiment configurations, or `runs/*` branches to this repository.**
@@ -54,13 +54,15 @@ Every run writes beneath a new `runs/<run_uuid>/jobs/<slurm_job_id>/` directory.
 
 Scheduler exit zero is insufficient for success: every expected output must validate. Lost submission responses keep capacity reserved and trigger reconciliation, never an automatic second `sbatch`.
 
+The operator's `presets.quick-test.gpus` setting defaults to one and accepts only the integers one or two. Reserving two requires an explicit supported H100/H200 type; researchers cannot change it in their run YAML. The October 2 acceptance test reserved two H100 GPUs while extraction used only the first GPU assigned by Slurm. Requested, allocated, and used counts are recorded separately; allocating two does not enable multi-GPU extraction. See the [adapter contract](docs/cluster-adapter.md#match-the-runtime-to-the-gpu).
+
 ## Optional deployment on Render
 
 Use **one paid Render web service with one persistent disk**. The service runs the website and job monitor together; SQLite stores history on the disk. Training/extraction stays on the lab's GPUs. There is no separate database, worker service, or GitHub Pages site.
 
-Start with [the Render setup guide](docs/render.md). [render.yaml](render.yaml) defines one 1-CPU/2-GB service and a 10-GB disk; review Render's displayed cost before creating it. Daily application backups retain three copies on that disk; an operator must also export backups elsewhere. Automatic infrastructure deployments are disabled, so experiment pushes do not restart the application.
+Start with [the Render setup guide](docs/render.md). [render.yaml](render.yaml) starts with one 0.5-CPU/512-MB service and a 10-GB disk, about $9.50/month at October 2026 prices before taxes and usage extras. Review Render's displayed cost and check peak memory during the pilot. Daily application backups retain three copies on that disk; an operator must also export backups elsewhere. Automatic infrastructure deployments are disabled, so experiment pushes do not restart the application.
 
-The submission service starts with real submissions disabled in operator configuration. Complete the approved repository/actor IDs, immutable input/image/checkpoint hashes, and private site settings from [config/example.yaml](config/example.yaml). Placeholder hashes deliberately fail validation. No Render service has been created; the current live preview uses the laptop and a temporary tunnel.
+The submission service starts with real submissions disabled in operator configuration. Complete the approved repository/actor IDs, immutable input/image/checkpoint hashes, and private site settings from [config/example.yaml](config/example.yaml). Placeholder hashes deliberately fail validation. The Blueprint prompts for private values; supply them in Render, never in Git. A Render deployment has not yet been verified; the current live preview uses the laptop and a temporary tunnel.
 
 The existing [Docker Compose guide](docs/deployment.md) remains an alternative for a lab-managed Linux server.
 
@@ -86,6 +88,6 @@ node --check dmasif_console/static/console.js
 
 Tests cover signed/replayed webhooks, identity spoofing, concurrent acceptance, secret redaction, source pinning, output collisions, corrupt/incomplete results, lost submission receipts, duplicate execution claims, cache recovery, and restore reconciliation. They use local temporary data and fake scheduler commands.
 
-The live pilot has a frozen container, a versioned cluster adapter, and a signed webhook on the private research repository. Real pushes verified invalid-config rejection, submission, running-state observation, duplicate delivery, and restart recovery. The first extraction failed on an incompatible Blackwell GPU; the dashboard now correctly shows its failed state and 2m 59s duration. A new acceptance run requests an H100. Successful scientific output validation and permanent hosting remain unverified. See the [acceptance record](docs/acceptance-2026-10-01.md) and [verification procedure](docs/live-submissions.md#acceptance-checks).
+The live pilot has a frozen container, a versioned cluster adapter, and a signed webhook on the private research repository. Real pushes verified invalid-config rejection, submission, running-state observation, duplicate delivery, and restart recovery. The first two extraction attempts failed on incompatible Blackwell GPUs because the cluster redirects single-GPU H100 requests to that pool. The explicitly authorized October 2 test reserved two H100 GPUs, used one for extraction, and completed job `114515` in **101 seconds**, producing a validated `1STP.npz`. Further submissions remain paused and the operator default is restored to one; the two-GPU permission covered that test only. **H100/H200 with the existing runtime remains the target; Blackwell support is deferred in [TODO.md](TODO.md).** Permanent hosting and routine one-GPU allocation still need resolution. See the [acceptance record](docs/acceptance-2026-10-01.md) for verification evidence and [verification procedure](docs/live-submissions.md#acceptance-checks).
 
 The design and review decisions are in [ARCHITECTURE.md](ARCHITECTURE.md).

@@ -90,12 +90,12 @@ def test_history_survives_initial_run_without_actor_metadata(templates, common):
     assert 'value="researcher" selected' in page
 
 
-def test_history_pause_is_visible_and_escapes_operator_reason(templates, common):
+def test_history_omits_global_operator_pause_notice(templates, common):
     page = templates.get_template("history.html").render(
         **common, runs=[], activity=[], stats={}, filters={},
         control={"paused": True, "reason": "Inspecting <script>unsafe()</script>"},
     )
-    assert 'id="submission-notice" hidden' not in page
-    assert "New submissions paused." in page
-    assert "Inspecting &lt;script&gt;unsafe()&lt;/script&gt;" in page
+    assert 'id="submission-notice"' not in page
+    assert "New submissions paused." not in page
+    assert "Inspecting" not in page
     assert "Up to 200 matches" in page

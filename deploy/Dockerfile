@@ -26,5 +26,5 @@ RUN chmod 0555 /usr/local/bin/dmasif-git-askpass \
 
 USER console
 EXPOSE 10000
-ENTRYPOINT ["dmasif-console"]
+ENTRYPOINT ["python", "-m", "dmasif_console.render_bootstrap"]
 CMD ["serve"]

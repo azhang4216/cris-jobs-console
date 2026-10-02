@@ -97,7 +97,7 @@
       <details class="panel technical-details">
         <summary>Provenance</summary>
         {% set public_provenance = {} %}
-        {% for key in ['source_commit', 'source_sha256', 'archive_sha256', 'runtime_sha256', 'checkpoint_sha256', 'adapter_version', 'adapter_sha256', 'input_manifest_sha256', 'dataset_id', 'seed', 'gpu_type', 'gpu_name', 'python', 'torch', 'cuda_runtime', 'feature_dimensions', 'commit_author', 'commit_committer'] %}
+        {% for key in ['source_commit', 'source_sha256', 'archive_sha256', 'runtime_sha256', 'checkpoint_sha256', 'adapter_version', 'adapter_sha256', 'input_manifest_sha256', 'dataset_id', 'seed', 'gpu_type', 'gpu_name', 'requested_gpu_count', 'allocated_gpu_count', 'used_gpu_count', 'python', 'torch', 'cuda_runtime', 'feature_dimensions', 'commit_author', 'commit_committer'] %}
         {% if key in (run.get('provenance') or {}) %}{% set _ = public_provenance.update({key: run.get('provenance')[key]}) %}{% endif %}
         {% endfor %}
         <pre class="json-block" id="provenance-json">{{ public_provenance|tojson(indent=2) }}</pre>

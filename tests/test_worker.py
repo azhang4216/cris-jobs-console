@@ -89,6 +89,50 @@ def test_submission_unknown_reconciles_after_restart_without_resubmitting(setup)
     assert store.get_run(run_id)["state"] == "QUEUED"
 
 
+def test_submission_warning_is_one_redacted_public_event_without_changing_state(setup):
+    from fastapi.testclient import TestClient
+    from dmasif_console.web import create_app
+
+    settings, store, adapter, worker = setup
+    settings.webhook_secret = "private-webhook-secret-for-test"
+    warning = (f"GPU request was rerouted by site policy on {settings.cluster.host}; "
+               f"private path {settings.cluster.root}; credential {settings.webhook_secret}")
+    adapter.job["submission_warning"] = warning
+    run_id = enqueue(settings, store)
+    worker.tick()
+    worker.tick()
+    Worker(settings, store, adapter).tick()
+    assert store.get_run(run_id)["state"] == "QUEUED"
+    assert adapter.submit_count == 1
+    events = [event for event in store.events(run_id) if event["kind"] == "SUBMISSION_WARNING"]
+    assert len(events) == 1 and warning in str(events[0]["detail"])
+    assert store.jobs(run_id)[0]["submission_warning"] == warning
+    with TestClient(create_app(settings)) as client:
+        data = client.get(f"/api/runs/{run_id}").json()
+        event = next(event for event in data["events"] if event["kind"] == "SUBMISSION_WARNING")
+        assert "GPU request was rerouted" in event["reason"]
+        for private in (settings.cluster.host, settings.cluster.root, settings.webhook_secret):
+            assert private not in str(data)
+        assert "[private]" in event["reason"]
+        page = client.get(f"/runs/{run_id}").text
+        assert "GPU request was rerouted" in page
+        assert settings.webhook_secret not in page
+
+
+def test_warning_recovers_after_lost_submit_response_without_a_second_submission(setup):
+    settings, store, adapter, worker = setup
+    run_id = enqueue(settings, store)
+    adapter.ambiguous = True
+    adapter.job["submission_warning"] = "The site changed the requested GPU type."
+    worker.tick()
+    assert store.get_run(run_id)["state"] == "SUBMISSION_UNKNOWN"
+    Worker(settings, store, adapter).tick()
+    Worker(settings, store, adapter).tick()
+    assert adapter.submit_count == 1
+    assert store.get_run(run_id)["state"] == "QUEUED"
+    assert len([event for event in store.events(run_id) if event["kind"] == "SUBMISSION_WARNING"]) == 1
+
+
 def test_rejected_config_keeps_source_and_private_original_without_submitting(setup, monkeypatch):
     settings, store, adapter, worker = setup
     run_id = enqueue(settings, store)

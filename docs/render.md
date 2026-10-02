@@ -6,19 +6,35 @@ If deployed on Render, use one web service and one persistent disk. The service 
 
 Researchers only need the dashboard URL and their personal GitHub account. The website is public and needs no login. A push to `runs/<experiment>`, such as `runs/pocket-v1`, records the exact commit and creates a new run with its own output directory. The signed webhook supplies the pushing researcher's login and numeric ID automatically; branch names do not identify their owner. There is no website submission form or researcher account.
 
+## Starting cost and size
+
+The Blueprint starts with `0.5c-512mb` (formerly Starter): 0.5 CPU and 512 MB RAM. As of October 2, 2026, compute is $7/month and the 10-GB persistent disk is $2.50/month, for **about $9.50/month** on a $0 Hobby workspace, before taxes and usage extras. The previous `1c-2g` choice is $25/month plus the same disk. See [Render pricing](https://render.com/pricing) and [compute plans](https://render.com/docs/compute-plans).
+
+This small tier is a starting point for the four-researcher pilot, not a measured production memory requirement. The service runs the web process, one worker, and a supervisor; GPU computation runs on the cluster. Check Render memory metrics through source preparation, submission, monitoring, downloads, and backup before enabling routine use. Source archives are buffered during SSH transfer, so large repositories can need more memory even with few users. If the service runs out of memory, use `1c-2g` and reconcile any interrupted submission before proceeding.
+
+An October 2 local test of the production Docker image passed signed synthetic submission, invalid-config rejection, result download, backup, and restart recovery with a 512-MiB memory limit, no swap, and 0.5 CPU. Its cgroup memory peak was about 201 MiB with no out-of-memory events. It used tiny synthetic inputs and local CPU emulation of the deployment architecture; this does not establish memory requirements for large archives or verify real SSH access from Render.
+
+Keep the disk: it holds SQLite history and saved sources. [Render's free web tier](https://render.com/docs/free) cannot attach a persistent disk and sleeps after 15 minutes without inbound traffic, so it cannot host this design reliably. No separate paid database or worker service is needed. A Hobby workspace has one administrator seat; researchers can still use GitHub and the public dashboard without Render accounts. Additional Render administrators require a workspace plan that supports them.
+
 ## Set up once
 
-1. **Connect the infrastructure repository**, `azhang4216/dmasif-console`, to Render. Keep its `main` branch protected and separate from the dMaSIF research repository. Before publishing any changes, check Git's file list; private configuration, keys, notes, and state must stay ignored.
-2. **Prepare the private operator configuration.** Copy [config/example.yaml](../config/example.yaml) to ignored `deploy/private/operator.yaml`. Fill in the approved research repository and numeric researcher IDs, cluster settings, operator contact, dataset checksums, and tested runtime/checkpoint hashes. Keep `submissions_enabled: false`. The fixed cluster adapter and runtime must be installed and tested before enabling jobs; see [cluster setup](cluster-adapter.md). These instructions do not install anything remotely.
-3. **Create a Render Blueprint** from the infrastructure repository. [render.yaml](../render.yaml) requests a paid `1c-2g` web service in Virginia, one instance, and a 10-GB disk. Review the displayed recurring charge before creating resources. Supply a long random value when Render prompts for `DMASIF_WEBHOOK_SECRET`.
-4. **Add the three private files** below under the service's **Environment → Secret Files**. Do not paste them into GitHub, the Blueprint, application logs, or chat. The first deploy can fail while these files are missing; after saving all three, deploy the service again.
+1. **Connect the infrastructure repository**, `azhang4216/cris-jobs-console`, to Render. Keep its `main` branch protected and separate from the dMaSIF research repository. Before publishing any changes, check Git's file list; private configuration, keys, notes, and state must stay ignored.
+2. **Prepare the private operator configuration.** Copy [config/example.yaml](../config/example.yaml) to ignored `deploy/private/operator.yaml`, or adapt the verified local pilot configuration. Fill in the approved research repository and numeric researcher IDs, cluster settings, operator contact, dataset checksums, and tested runtime/checkpoint hashes. Keep `submissions_enabled: false`. The fixed cluster adapter and runtime must be installed and tested before enabling jobs; see [cluster setup](cluster-adapter.md). These instructions do not install anything remotely.
+3. **Create a Render Blueprint** from the infrastructure repository. [render.yaml](../render.yaml) requests a paid `0.5c-512mb` web service in Virginia, one instance, and a 10-GB disk. Review the displayed recurring charge before creating resources.
+4. **Fill in Render's secret prompts** using the table below. The Blueprint declares only the names with `sync: false`; paste actual values into Render, never into `render.yaml`, GitHub, application logs, or chat. For an existing Blueprint, add these variables manually under **Environment → Environment Variables**, because Render prompts only when a Blueprint is first created. Save and deploy after all values are present. See [Render's secret-prompt behavior](https://render.com/docs/blueprint-spec#prompting-for-secret-values).
 5. **Open the Render HTTPS URL**; no login is required. Configure the research repository's push webhook using the table below. Keep submissions disabled until the authorized cluster smoke test is ready.
 
-| Render secret filename | Contents | Application location |
+| Render environment variable | Value to paste | Purpose |
 | --- | --- | --- |
-| `operator.yaml` | Completed private operator configuration | `/etc/secrets/operator.yaml` |
-| `cluster-key` | Approved unattended SSH private key, with its original multiline formatting | `/etc/secrets/cluster-key` |
-| `known-hosts` | Independently verified cluster SSH host entry | `/etc/secrets/known-hosts` |
+| `DMASIF_OPERATOR_YAML` | Complete private operator YAML | Cluster hostname, SSH username, account, paths, approved researchers, and tested runtime/data settings |
+| `DMASIF_SSH_PRIVATE_KEY` | Complete approved SSH private key, including BEGIN/END lines and original line breaks | Unattended cluster authentication |
+| `DMASIF_SSH_KNOWN_HOSTS` | Independently verified `known_hosts` entry | Verify the cluster's identity when connecting |
+| `DMASIF_WEBHOOK_SECRET` | A long random secret, also configured in the research repository's webhook | Authenticate GitHub push deliveries |
+| `DMASIF_REPOSITORY_TOKEN` | Fine-grained GitHub token with **Contents: Read-only**, restricted to `dmasif-experiments` | Fetch exact source commits from the private research repository |
+
+The Docker startup command writes the supplied configuration, key, host entry, and repository token to owner-only files in `/home/console/.config/dmasif-console/` and removes those raw values from the environment inherited by the application. They are outside the persistent state, backups, and built image. The Blueprint already sets `DMASIF_CONFIG`, `DMASIF_SSH_KEY`, `DMASIF_KNOWN_HOSTS`, and `DMASIF_REPOSITORY_TOKEN_FILE` to the generated paths. **Those four variables hold paths; do not replace their values with file contents.** Missing required secrets stop startup without logging their values.
+
+GitHub Actions secrets do not transfer automatically to Render. Use the operator configuration schema rather than pasting raw login notes. SSH currently uses port 22. If Render's initial form does not preserve multiline values, add them in the service's Environment editor, or use the Secret Files alternative below; do not turn real line breaks into literal `\n` text.
 
 The key's extension does not matter. The key must be valid and usable without an interactive passphrase prompt. Each SSH call uses a temporary owner-readable copy of the mounted key, which is removed afterward; never make a private key public to fix SSH permissions.
 
@@ -32,7 +48,11 @@ The key's extension does not matter. The key must be valid and usable without an
 
 Confirm that the cluster allows incoming SSH from the service's [Render outbound IP ranges](https://render.com/docs/outbound-ip-addresses). If it requires an institutional VPN or restricted source addresses, the site operator must arrange access first. No real connection has been verified from Render yet.
 
-For the first authorized run, set `submissions_enabled: true` in Render's `operator.yaml` secret file and redeploy. In **Render → Shell**, clear any stored pause:
+When moving the existing laptop pilot, preserve its history using the application's backup and restore procedure below before switching the GitHub webhook. Stop the old service's worker before starting the replacement worker; do not run two independent submission services against the same cluster run directory. Leave the Render webhook disconnected until restored history and reconciliation have been checked.
+
+Hosting on Render does not change the cluster's GPU allocation policy. The successful [H100 acceptance test](acceptance-2026-10-01.md) reserved two GPUs with permission for that test only; routine submissions remain paused while an approved allocation route is decided. Do not enable the default one-GPU preset assuming it will receive an H100/H200.
+
+Once the allocation route and run are authorized, set `submissions_enabled: true` in Render's `DMASIF_OPERATOR_YAML` value and redeploy. In **Render → Shell**, clear any stored pause:
 
 ```bash
 dmasif-console resume --actor YOUR_OPERATOR_NAME --reason "Approved initial extraction smoke test"
@@ -50,7 +70,7 @@ The Dockerfile starts `dmasif-console serve`: a supervisor starts the web proces
 | `/var/data/state/sources/` | Saved source snapshots |
 | `/var/data/state/artifacts/` | Bounded cache of validated downloads |
 | `/var/data/backups/` | Rotating application backups |
-| `/etc/secrets/` | Render-provided private files; excluded from application backups |
+| `/home/console/.config/dmasif-console/` | Generated private runtime files; excluded from application backups |
 
 Keep one instance and the disk mounted at `/var/data`. Only this mount persists. Run operator commands in the live service's **Shell**, not a Render one-off job or pre-deploy command, because those do not have the disk. See [Render's disk requirements](https://render.com/docs/disks).
 
@@ -58,15 +78,20 @@ Keep one instance and the disk mounted at `/var/data`. Only this mount persists.
 
 ## Private research repository
 
-For a private dMaSIF repository, create a GitHub token restricted to reading that repository's contents. Add it as a Render secret file named `repository-token`, then set these service environment variables:
+The Blueprint includes `DMASIF_REPOSITORY_TOKEN` and the fixed credential helper settings. Restrict that token to reading the research repository's contents. Do not put it in the clone URL. Render's access to build the infrastructure repository does not automatically grant the running application access to the separate research repository. If deploying against a public research repository, omit the token prompt from your Blueprint and leave the token unset.
 
-```text
-DMASIF_REPOSITORY_TOKEN_FILE=/etc/secrets/repository-token
-GIT_ASKPASS=/usr/local/bin/dmasif-git-askpass
-GIT_TERMINAL_PROMPT=0
-```
+## Secret Files alternative
 
-The fixed credential helper reads the file for Git authentication. Do not put the token in the clone URL. Render's access to build the infrastructure repository does not automatically grant the running application access to the separate research repository.
+Existing file-based deployments remain supported. If you prefer Render's **Environment → Secret Files**, remove the corresponding raw-content environment variables and add these files instead:
+
+| Secret filename | Path environment variable | Value |
+| --- | --- | --- |
+| `operator.yaml` | `DMASIF_CONFIG` | `/etc/secrets/operator.yaml` |
+| `cluster-key` | `DMASIF_SSH_KEY` | `/etc/secrets/cluster-key` |
+| `known-hosts` | `DMASIF_KNOWN_HOSTS` | `/etc/secrets/known-hosts` |
+| `repository-token` | `DMASIF_REPOSITORY_TOKEN_FILE` | `/etc/secrets/repository-token` |
+
+Keep `DMASIF_WEBHOOK_SECRET`, `GIT_ASKPASS`, and `GIT_TERMINAL_PROMPT` as configured by the Blueprint. Update the path entries in your Blueprint to match this alternative before syncing it again. Do not combine a raw-content variable with an `/etc/secrets` destination: the startup command never overwrites Render-mounted secret files. Edit `operator.yaml` for subsequent configuration changes when using this alternative.
 
 ## Secrets and access
 
@@ -74,7 +99,7 @@ Dashboard pages, run APIs, logs, and result downloads are public. Keeping either
 
 The browser never receives the SSH key, private operator configuration, or repository token. Render administrators and the backend can access the service's secrets, so only trusted operators should administer it. The web and worker share one service and operating-system user; this design does not isolate the key from a compromised web process.
 
-Render makes [secret files](https://render.com/docs/configure-environment-variables#secret-files) available under `/etc/secrets`. It also places copies in the Docker build context. The Dockerfile-specific allowlist excludes them, and Dockerfile instructions never reference credential build arguments. Preserve these rules when editing the image; never replace explicit `COPY` instructions with an unrestricted `COPY . .`. See [Render's Docker secret handling](https://render.com/docs/docker).
+Render stores the submitted environment values, and authorized service administrators can access them. Removing raw values from the application environment does not remove them from Render's settings. Dockerfile instructions never reference credential build arguments. If using [Render Secret Files](https://render.com/docs/configure-environment-variables#secret-files), Render also places copies in the Docker build context; our Dockerfile-specific allowlist excludes them. Preserve these rules when editing the image; never replace explicit `COPY` instructions with an unrestricted `COPY . .`. See [Render's Docker secret handling](https://render.com/docs/docker).
 
 Local keys, login notes, `.env` files, `deploy/private/`, `.local/`, and application state remain Git-ignored. This prevents accidental future additions; it cannot remove a secret already published in Git history. Application backups contain private metadata and source code, so treat those as private too.
 
@@ -123,4 +148,4 @@ To restore:
 
 After any deployment or maintenance downtime, inspect GitHub's delivery history and request redelivery of failed pushes. GitHub does not automatically retry them; saved delivery identities prevent duplicate jobs. [GitHub delivery recovery](https://docs.github.com/en/webhooks/using-webhooks/handling-failed-webhook-deliveries)
 
-This repository prepares the application and hosting configuration. No Render service, paid resource, remote adapter installation, or GPU job has been created as part of the local implementation.
+The local pilot has installed an isolated cluster adapter and completed a real GPU run; see the [acceptance record](acceptance-2026-10-01.md). No Render deployment or connection from Render to the cluster has been verified yet.

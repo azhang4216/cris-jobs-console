@@ -45,6 +45,7 @@ PROVENANCE_FIELDS = {
     "adapter_sha256", "input_manifest_sha256", "dataset_id", "seed", "gpu_type", "gpu_name", "feature_dimensions",
     "python", "torch", "cuda_runtime",
 }
+GPU_COUNT_FIELDS = {"requested_gpu_count", "allocated_gpu_count", "used_gpu_count"}
 
 
 def _redact(value, settings: Settings, run: dict | None = None):
@@ -124,6 +125,9 @@ def public_run(run: dict, settings: Settings) -> dict:
     ]
     provenance = {**(run.get("provenance") or {}), **(raw_validation.get("provenance") or {})}
     result["provenance"] = {k: provenance[k] for k in PROVENANCE_FIELDS if k in provenance}
+    # Publish counts only, never nested allocation records or CUDA device IDs.
+    result["provenance"].update({key: provenance[key] for key in GPU_COUNT_FIELDS
+                                 if type(provenance.get(key)) is int and provenance[key] >= 0})
     source = run.get("source") if isinstance(run.get("source"), dict) else {}
     result["provenance"].update(source_commit=run.get("commit_sha"),
                                  source_sha256=source.get("sha256") or provenance.get("source_sha256"),

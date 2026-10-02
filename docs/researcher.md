@@ -6,7 +6,7 @@ This first release performs **feature extraction** with the tested dMaSIF interf
 
 ## Where to edit
 
-**Make your experiment changes in the lab's dMaSIF research repository.** The `dmasif-console` repository provides the service and the copyable configuration template.
+**Make your experiment changes in the lab's dMaSIF research repository.** The `cris-jobs-console` repository provides the service and the copyable configuration template.
 
 ```text
 your-dmasif-research-checkout/
@@ -95,6 +95,8 @@ Runs always use separate output directories. Repeating a commit never overwrites
 
 ## Repeat or change a run
 
+**You can reuse the same `runs/experiment-name` branch.** Pushing a new commit creates a new run ID, saved source snapshot, and output directory; earlier runs keep their code, logs, and results. This protection does not depend on changing `repeat_id`. A force-push also creates a separate run, although ordinary commits are easier to trace.
+
 Update the code/configuration as needed. To repeat unchanged code, change `repeat_id` to a new value, commit, and push:
 
 ```yaml
@@ -102,6 +104,8 @@ repeat_id: second-run
 ```
 
 This starts a new run. It does not resume the previous run. Dataset IDs come from the operator's immutable registry; cluster paths, custom shell commands, image paths, and scheduler flags are not accepted in the experiment file.
+
+A push with no Git changes does not create a new event. GitHub redelivery of an already accepted event reuses the existing run and cannot submit it twice. One push runs its final commit, not every intermediate commit. If a force-push makes a commit unavailable before the service can save it, preparation fails rather than substituting different code.
 
 ## Reading the dashboard
 

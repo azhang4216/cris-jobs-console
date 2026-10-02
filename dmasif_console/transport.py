@@ -59,7 +59,7 @@ def _prepared_run(run: dict) -> dict:
     # Cluster credentials only exist on the worker. They cannot enter jobs.
     cluster.pop("ssh_key_path", None)
     cluster.pop("known_hosts_path", None)
-    for name in ("qos", "cpus", "memory_gb", "wall_minutes"):
+    for name in ("gpus", "qos", "cpus", "memory_gb", "wall_minutes"):
         if name in resolved.get("preset", {}):
             cluster[name] = resolved["preset"][name]
     return result

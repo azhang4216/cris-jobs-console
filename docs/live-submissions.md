@@ -2,7 +2,7 @@
 
 The research repository is [azhang4216/dmasif-experiments](https://github.com/azhang4216/dmasif-experiments). Its `main` branch is for development; pushes to `runs/<experiment>` request a run. The dashboard and receiver run together on the application host. Researchers do not receive SSH credentials.
 
-The operator registers immutable input, checkpoint, and container hashes, installs the fixed adapter in a new managed cluster root, and approves numeric GitHub user IDs. The extraction preset uses one registered `1STP.pdb` input, one H100 GPU, eight CPU cores, 64 GB memory, and a 15-minute limit. The H100 restriction keeps this frozen runtime off incompatible Blackwell GPUs. Runtime packaging is a separate CPU-only setup job.
+The operator registers immutable input, checkpoint, and container hashes, installs the fixed adapter in a new managed cluster root, and approves numeric GitHub user IDs. The extraction preset uses one registered `1STP.pdb` input, defaults to one requested GPU, and permits an operator-approved two-GPU H100/H200 reservation while extraction uses one device. This site's scheduler rewrites single-GPU requests to RTX 6000 Blackwell, where the frozen runtime failed. An isolated two-H100 test succeeded with the existing runtime, eight CPU cores, 64 GB memory, and a 15-minute limit. The preset has returned to one GPU and new cluster submissions remain paused until the regular allocation policy is settled; see [GPU compatibility](cluster-adapter.md#match-the-runtime-to-the-gpu). Runtime packaging is a separate CPU-only setup job.
 
 ## Start the configured workstation
 
@@ -34,7 +34,7 @@ cloudflared tunnel --url http://127.0.0.1:8002 --no-autoupdate
 
 Configure a push-only webhook in the research repository with the tunnel's HTTPS URL plus `/webhooks/github`, JSON content type, SSL verification enabled, and the exact private webhook secret. Keep the secret out of screenshots, repository files, and command arguments. A valid signature, approved repository ID, approved personal GitHub user ID, and matching branch are all required.
 
-Check the webhook delivery response before pushing a test branch. If the tunnel restarts, update the existing webhook URL; do not create additional hooks. Deliveries missed while the laptop was offline must be inspected and redelivered from GitHub. A redelivery must retain the original delivery identity, and the service will reuse its existing run.
+Check the webhook delivery response before pushing a test branch. If the tunnel restarts, update the existing webhook configuration with the new URL, JSON content type, SSL verification, and the existing signing secret; do not create additional hooks. A URL-only configuration update dropped the secret during the pilot, resulting in unsigned deliveries and HTTP 401. Supply the secret through protected input, never a command argument or repository file, then verify a signed delivery is accepted. Deliveries missed or rejected while the laptop was offline or misconfigured must be inspected and redelivered from GitHub. A redelivery must retain the original delivery identity, and the service will reuse its existing run.
 
 A Quick Tunnel provides a temporary public test URL. It is not an always-on deployment, has no uptime guarantee, and its URL changes on restart. A stable shared service needs an always-on host and a stable HTTPS address. GitHub Pages alone cannot run this backend. [Cloudflare Quick Tunnels](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/), [GitHub Pages](https://docs.github.com/en/pages/getting-started-with-github-pages/what-is-github-pages)
 
@@ -44,7 +44,7 @@ Use two distinct branches and retain their complete commit SHAs. Do not change a
 
 | Case | Request | Evidence required |
 | --- | --- | --- |
-| Valid extraction | `runs/1stp-smoke-check-h100`, registered dataset, integer seed | Genuine GitHub delivery; exact actor/commit/config; recorded queue and running observations; terminal Slurm success; validated NPZ; readable logs; working checksum-verified download. |
+| Valid extraction | `runs/1stp-smoke-check`, registered dataset, integer seed | Genuine GitHub delivery; exact actor/commit/config; recorded queue and running observations; terminal Slurm success; validated NPZ; readable logs; working checksum-verified download. |
 | Invalid configuration | `runs/config-rejection-check`, seed set to a string | Genuine GitHub delivery; rejected status; clear seed type/range message; exact actor/commit/source identity; no Slurm job, GPU use, or result files. |
 
 The detail page retains received/submitted/started/ended times, actual state transitions, GitHub identity, code link, configuration, runtime/checkpoint/source hashes, scheduler ID and exit code, logs, and result validation. Raw rejected YAML remains private; the site displays safe field-specific diagnostics. A very short job can finish between polls; the service must not invent a running observation. Scientific success requires valid results as well as a successful scheduler exit.
@@ -57,7 +57,7 @@ With the project installed in `.venv`, run the saved verifier from this checkout
 .venv/bin/python scripts/verify_live_acceptance.py http://127.0.0.1:8002
 ```
 
-It defaults to the H100 retry's exact commit/repeat label, the original invalid-config commit, their branches, research repository, and `azhang4216` identity. The original unrestricted smoke test remains a failed historical run; it is not rewritten or counted as a pass. Use `--help` to override these identities, replace the base URL to verify the public site, or add `--output /tmp/dmasif-acceptance.json` to save its JSON summary. It uses only cached HTTP GET routes and checks real execution evidence plus the downloaded NPZ. Exit `0` means all checks passed, `2` means pending or unavailable, and `1` means verification failed. A queued job must remain pending; it is never counted as a pass.
+It defaults to the October 2 test commit `347623c02d64e440bc4ef61cbce787a95b923531` on the reused `runs/1stp-smoke-check` branch, the original invalid-config commit, their repeat labels, research repository, and `azhang4216` identity. Job `114515` succeeded on H100 in 101 seconds with two GPUs allocated and one used. The local and public verifiers both passed, including the real NPZ download and invalid-config rejection. Both earlier failed extractions remain historical runs and are never rewritten or counted as a pass. Use `--help` to supply different run identities. Replace the base URL to verify the public site, or add `--output /tmp/dmasif-acceptance.json` to save its JSON summary. It uses only cached HTTP GET routes and checks real execution evidence plus the downloaded NPZ. Exit `0` means all checks passed, `2` means pending or unavailable, and `1` means verification failed. A queued job must remain pending; it is never counted as a pass.
 
 Each run has a distinct UUID and allocation directory. Retain submission/execution claims and receipts; an uncertain response must be reconciled, never retried blindly. Do not reuse the historical shared output directory.
 

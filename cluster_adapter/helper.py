@@ -41,6 +41,21 @@ def scheduler_token(value: str) -> str:
     return str(value)
 
 
+def gpu_allocation(cluster: dict) -> tuple[int, str]:
+    count = cluster.get("gpus", 1)
+    if type(count) is not int or count not in {1, 2}:
+        raise AdapterError("GPU allocation count must be an operator-configured integer from 1 to 2")
+    gpu_type = cluster.get("gpu_type")
+    if gpu_type is not None and (
+        type(gpu_type) is not str or not 1 <= len(gpu_type) <= 100
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", gpu_type) is None
+    ):
+        raise AdapterError("GPU type must be an operator-configured scheduler token")
+    if count == 2 and gpu_type not in {"nvidia_h100_80gb_hbm3", "nvidia_h200"}:
+        raise AdapterError("Two-GPU allocation requires an explicit supported H100/H200 GPU type")
+    return count, f"gpu:{count}" if gpu_type is None else f"gpu:{gpu_type}:{count}"
+
+
 def state_name(value: str) -> str:
     return value.split(" ", 1)[0].rstrip("+")
 
@@ -62,17 +77,24 @@ class Helper:
             raise AdapterError("Unsafe run directory")
         return path
 
-    def command(self, argv: list[str], timeout: int = 45) -> str:
+    def command(self, argv: list[str], timeout: int = 45, *, warnings: list[str] | None = None) -> str:
         environment = dict(os.environ, TZ="UTC", LC_ALL="C")
         result = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False, env=environment)
         if result.returncode:
             raise AdapterError(f"{Path(argv[0]).name} failed with exit {result.returncode}: {result.stderr[-1000:]}")
+        if warnings is not None and result.stderr.strip():
+            warning = result.stderr.strip()
+            encoded = warning.encode("utf-8")
+            if len(encoded) > 16 * 1024:
+                warning = encoded[:16 * 1024 - 32].decode("utf-8", errors="ignore") + "\n[warning truncated]"
+            warnings.append(warning)
         return result.stdout
 
     def stage(self, payload: dict) -> dict:
         run, source = payload["run"], payload["source"]
         directory = self.directory(run["id"])
         cluster = run["resolved"]["cluster"]
+        requested_gpu_count, _ = gpu_allocation(cluster)
         unsquash = cluster.get("runtime_unsquash", False)
         if type(unsquash) is not bool:
             raise AdapterError("runtime_unsquash must be an operator-configured boolean")
@@ -181,7 +203,7 @@ class Helper:
         for name, checksum in adapter_files.items():
             if sha256_file(adapter / name) != checksum:
                 raise AdapterError("Pinned adapter changed")
-        provenance = {"source_sha256": source_hash, "commit_sha": source["commit_sha"], "runtime_sha256": cluster["runtime_sha256"], "checkpoint_sha256": cluster["checkpoint_sha256"], "adapter_sha256": adapter_hash, "adapter_version": cluster.get("adapter_version", "1.0.0"), "inputs": manifest}
+        provenance = {"source_sha256": source_hash, "commit_sha": source["commit_sha"], "runtime_sha256": cluster["runtime_sha256"], "checkpoint_sha256": cluster["checkpoint_sha256"], "adapter_sha256": adapter_hash, "adapter_version": cluster.get("adapter_version", "1.0.0"), "requested_gpu_count": requested_gpu_count, "inputs": manifest}
         stage = {"remote_dir": str(directory), "source_dir": str(source_root / "tree"), "adapter_dir": str(adapter), "runtime_image": str(runtime), "runtime_unsquash": unsquash, "checkpoint_path": str(checkpoint), "provenance": provenance}
         (directory / "logs").mkdir(exist_ok=True)
         (directory / "jobs").mkdir(exist_ok=True)
@@ -202,13 +224,7 @@ class Helper:
         cpus, memory, minutes = int(cluster.get("cpus", 8)), int(cluster.get("memory_gb", 64)), int(cluster.get("wall_minutes", 15))
         if not (1 <= cpus <= 8 and 1 <= memory <= 64 and 1 <= minutes <= 15 and cluster.get("qos", "test") == "test"):
             raise AdapterError("Resources exceed the tested quick-test limits")
-        gpu_type = cluster.get("gpu_type")
-        if gpu_type is not None and (
-            type(gpu_type) is not str or not 1 <= len(gpu_type) <= 100
-            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", gpu_type) is None
-        ):
-            raise AdapterError("GPU type must be an operator-configured scheduler token")
-        gpu_request = "gpu:1" if gpu_type is None else f"gpu:{gpu_type}:1"
+        _, gpu_request = gpu_allocation(cluster)
         return "\n".join([
             "#!/bin/bash", f"#SBATCH --account={scheduler_token(cluster['account'])}",
             f"#SBATCH --partition={scheduler_token(cluster['partition'])}", "#SBATCH --qos=test", f"#SBATCH --gres={gpu_request}",
@@ -238,12 +254,15 @@ class Helper:
             raise AdapterError("SUBMISSION_UNCERTAIN: Persistent submission claim exists without resolved scheduler evidence")
         # No code path may remove this claim or retry this potentially executed call.
         try:
-            output = self.command(["sbatch", "--parsable", "--job-name=" + tag, "--comment=" + tag, "--no-requeue", "--open-mode=append", str(directory / "submit.sbatch")])
+            warnings: list[str] = []
+            output = self.command(["sbatch", "--parsable", "--job-name=" + tag, "--comment=" + tag, "--no-requeue", "--open-mode=append", str(directory / "submit.sbatch")], warnings=warnings)
             response = output.strip().splitlines()[-1]
             match = re.fullmatch(r"([0-9]+)(?:;([A-Za-z0-9_-]+))?", response)
             if not match:
                 raise AdapterError("Invalid sbatch response")
             receipt = {"job_id": job_id(match.group(1)), "cluster": "cluster", "reported_cluster": match.group(2), "state": "PENDING", "exit_code": None, "submitted_at": utcnow(), "started_at": None, "ended_at": None, "observed_at": utcnow(), "terminal": False, "owner": getpass.getuser(), "tag": tag}
+            if warnings:
+                receipt["submission_warning"] = "\n".join(warnings)
             write_json(receipt_path, receipt, exclusive=True)
             return [receipt]
         except Exception as exc:
@@ -299,7 +318,11 @@ class Helper:
         receipt_path = directory / "submission-receipt.json"
         if receipt_path.exists():
             receipt = read_json(receipt_path)
-            jobs.setdefault(receipt["job_id"], receipt)
+            job = jobs.setdefault(receipt["job_id"], receipt)
+            if receipt.get("submission_warning"):
+                # Keep fresh scheduler state while recovering the original
+                # submission warning after a worker/connection failure.
+                job.setdefault("submission_warning", receipt["submission_warning"])
         return list(jobs.values())
 
     def status(self, payload: dict) -> list[dict]:

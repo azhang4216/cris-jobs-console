@@ -22,7 +22,7 @@ from urllib.parse import quote, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener, HTTPSHandler
 
 # Public identities of the current pilot acceptance cases, not credentials.
-VALID_SHA = "a4c4a819c0b7500019fc8ff8596c4aa042cd883b"
+VALID_SHA = "347623c02d64e440bc4ef61cbce787a95b923531"
 INVALID_SHA = "7a8ac87600b5fbf089bb77d7dc3e00bbc4d452a6"
 DEFAULT_REPO_URL = "https://github.com/azhang4216/dmasif-experiments"
 MAX_JSON = 4 * 1024 * 1024
@@ -299,8 +299,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("base_url")
     parser.add_argument("--repo-url", default=DEFAULT_REPO_URL, help="Expected GitHub repository URL (no .git suffix)")
-    parser.add_argument("--valid-branch", default="runs/1stp-smoke-check-h100")
-    parser.add_argument("--valid-repeat-id", default="acceptance-valid-20261001-h100")
+    parser.add_argument("--valid-branch", default="runs/1stp-smoke-check")
+    parser.add_argument("--valid-repeat-id", default="acceptance-valid-20261001")
     parser.add_argument("--invalid-branch", default="runs/config-rejection-check")
     parser.add_argument("--valid-sha", default=VALID_SHA, help="Full valid-case commit; defaults to the current pilot")
     parser.add_argument("--invalid-sha", default=INVALID_SHA, help="Full rejected-case commit; defaults to the current pilot")

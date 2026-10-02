@@ -1,16 +1,17 @@
 # One paid application, one disk. No separate database or worker service.
-# Add the private files named below in Render > Environment > Secret Files.
-# Never paste their contents into this file or commit operator.yaml.
+# Render prompts for sync:false values when creating a Blueprint.
+# Never paste actual values into this file or commit operator.yaml.
 services:
   - type: web
     name: dmasif-console
     runtime: docker
-    plan: 1c-2g
+    # Small-lab pilot; check memory during submission before increasing limits.
+    plan: 0.5c-512mb
     region: virginia
     branch: main
     dockerfilePath: ./deploy/Dockerfile
     dockerContext: .
-    # Dockerfile's default starts the supervised web + worker command.
+    # Bootstrap writes private runtime files, then starts supervised web + worker.
     autoDeployTrigger: "off"
     numInstances: 1
     healthCheckPath: /healthz
@@ -23,13 +24,19 @@ services:
       - key: PORT
         value: "10000"
       - key: DMASIF_CONFIG
-        value: /etc/secrets/operator.yaml
+        value: /home/console/.config/dmasif-console/operator.yaml
       - key: DMASIF_STATE_DIR
         value: /var/data/state
       - key: DMASIF_SSH_KEY
-        value: /etc/secrets/cluster-key
+        value: /home/console/.config/dmasif-console/cluster-key
       - key: DMASIF_KNOWN_HOSTS
-        value: /etc/secrets/known-hosts
+        value: /home/console/.config/dmasif-console/known-hosts
+      - key: DMASIF_REPOSITORY_TOKEN_FILE
+        value: /home/console/.config/dmasif-console/repository-token
+      - key: GIT_ASKPASS
+        value: /usr/local/bin/dmasif-git-askpass
+      - key: GIT_TERMINAL_PROMPT
+        value: "0"
       - key: DMASIF_BACKUP_DIR
         value: /var/data/backups
       - key: DMASIF_BACKUP_INTERVAL_SECONDS
@@ -37,4 +44,16 @@ services:
       - key: DMASIF_BACKUP_KEEP
         value: "3"
       - key: DMASIF_WEBHOOK_SECRET
+        sync: false
+      # Full private YAML configuration, including cluster host/user/paths.
+      - key: DMASIF_OPERATOR_YAML
+        sync: false
+      # Paste the whole private key, including BEGIN/END lines and line breaks.
+      - key: DMASIF_SSH_PRIVATE_KEY
+        sync: false
+      # Verified known_hosts entry; do not derive trust from a fresh ssh-keyscan.
+      - key: DMASIF_SSH_KNOWN_HOSTS
+        sync: false
+      # Fine-grained token: Contents:Read for the private research repository.
+      - key: DMASIF_REPOSITORY_TOKEN
         sync: false

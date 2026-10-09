@@ -336,9 +336,9 @@
       files.append(browse);
     }
     const state = node("td");
-    const enabled = dataset.available && dataset.enabled && dataset.dataset_id;
-    state.append(node("span", `dataset-status${!dataset.available ? " dataset-unavailable" : enabled ? " dataset-enabled" : ""}`,
-      !dataset.available ? "Unavailable" : enabled ? "Enabled for runs" : "Not enabled for runs"));
+    const registered = dataset.scope === "registered" && dataset.dataset_id;
+    state.append(node("span", `dataset-status${!dataset.available ? " dataset-unavailable" : registered ? " dataset-enabled" : ""}`,
+      !dataset.available ? "Inputs unavailable" : registered ? "Registered" : "Not registered"));
     row.append(identity, identifier, files, state);
     return row;
   }

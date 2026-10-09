@@ -27,9 +27,10 @@ const fileCalls = () => requests.filter(({ url }) => url.includes("/api/datasets
 const flush = async () => { for (let i = 0; i < 5; i++) await new Promise(setImmediate); };
 const catalogData = {
   datasets: [
-    { name: '<script>alert("unsafe")</script>', scope: "registered", dataset_id: "registered-1", description: "Atomic <coordinates>", file_count: 123, available: true, enabled: true },
+    { name: '<script>alert("unsafe")</script>', scope: "registered", dataset_id: "registered-1", description: "Atomic <coordinates>", file_count: 123, available: true, enabled: false },
     { name: "structures & models", scope: "project", dataset_id: null, description: "CIF models", file_count: 223972, available: true, enabled: false },
     { name: "Missing", scope: "registered", dataset_id: "missing", description: "", file_count: null, available: false, enabled: true },
+    { name: "release-v1", scope: "release", dataset_id: "release-v1", description: "Unregistered release", file_count: 10, available: true, enabled: false },
   ], source: "ssh", checked_at: "2026-10-09T16:00:00Z", truncated: true,
 };
 const respond = (queue, data) => queue.shift().resolve({ ok: true, json: async () => data });
@@ -58,12 +59,13 @@ window.fetch = (url, options) => {
   assert.equal(catalogCalls().length, 1, "No overlapping catalog requests");
   respond(pendingCatalog, catalogData);
   await flush();
-  assert.equal(el("datasets-body").children.length, 3);
+  assert.equal(el("datasets-body").children.length, 4);
   assert.equal(el("datasets-body").querySelector("script"), null);
   assert.match(el("datasets-body").textContent, /<script>alert\("unsafe"\)<\/script>/);
-  for (const text of ["Enabled for runs", "Not registered", "Not enabled for runs", "Unavailable"]) {
-    assert(el("datasets-body").textContent.includes(text));
-  }
+  assert.deepEqual([...el("datasets-body").querySelectorAll(".dataset-status")].map((status) => status.textContent),
+    ["Registered", "Not registered", "Inputs unavailable", "Not registered"]);
+  assert.match(el("datasets-table").textContent, /Run dataset ID/);
+  assert.match(el("datasets-table").textContent, /Run registration/);
   assert.equal(el("datasets-truncated").hidden, false);
   assert.match(el("datasets-checked").textContent, /Live cluster via SSH/);
   const browse = () => [...window.document.querySelectorAll(".dataset-browse")];

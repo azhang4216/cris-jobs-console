@@ -463,9 +463,15 @@ def _public_result(result, settings, source):
         elif dataset_id is not None:
             description = "Dataset collection found on the cluster; not registered for console runs."
         elif kind == "manifest":
-            description = "Project manifests or input lists."
+            description = "Metadata tables, receptor lists, or ligand fingerprints; not atomic coordinate files."
+        elif scope == "project" and name == "structures":
+            description = "Protein receptor coordinates; ligand files are stored separately in systems."
+        elif scope == "project" and name == "systems":
+            description = "Protein–ligand complex coordinates, with separate ligand SDF files alongside the systems."
+        elif scope == "project" and name == "test_pdbs":
+            description = "Small PDB structure fixtures for extraction tests."
         else:
-            description = "Project atomic coordinate collection."
+            description = "Collection of coordinate filenames; molecular contents are not checked by this listing."
         rows.append({**row, "description": description,
                      "enabled": configured is not None and row["available"]})
     if not result["truncated"] and not set(settings.datasets).issubset(

@@ -1,6 +1,6 @@
 # Run a dMaSIF experiment
 
-Use your normal Git workflow and the lab dashboard. You do not need an SSH login or a website account. The operator supplies the approved research repository and dashboard URL. Find enabled dataset IDs in the dashboard's **Available datasets** panel above the experiments table. The dashboard's run details, logs, and result downloads are public; open the URL without signing in. Your personal GitHub account identifies and authorizes your submissions.
+Use your normal Git workflow and the lab dashboard. You do not need an SSH login or a website account. The operator supplies the approved research repository and dashboard URL. Find registered run dataset IDs in the dashboard's **Available datasets** panel above the experiments table. The dashboard's run details, logs, and result downloads are public; open the URL without signing in. Your personal GitHub account identifies and authorizes your submissions.
 
 This first release performs **feature extraction** with the tested dMaSIF interface. Full training, arbitrary uploads, and new software dependencies need a later tested runtime/adapter release.
 
@@ -26,7 +26,7 @@ Develop in the lab's approved research repository. Save this file as `experiment
 
 ```yaml
 # EDIT THESE:
-dataset_id: demo-1stp-v1  # Choose an enabled ID from Available datasets.
+dataset_id: demo-1stp-v1  # Choose a registered run ID from Available datasets.
 seed: 0
 repeat_id: first-run
 
@@ -109,11 +109,13 @@ A push with no Git changes does not create a new event. GitHub redelivery of an 
 
 ## Reading the dashboard
 
-**Available datasets** reads the cluster over SSH whenever you load or reload the page, or select **Refresh** in that panel. It lists discovered project data collections alongside registered datasets, including collections with no experiment history. Only IDs marked **Enabled for runs** can be used in `experiments/run.yaml`; ask the operator to register other collections. Coordinate files such as CIF and PDB identify structure collections; SIF runtime images are not datasets. Discovery checks file availability; the runner still verifies immutable checksums before execution.
+**Available datasets** reads the cluster over SSH whenever you load or reload the page, or select **Refresh** in that panel. It lists discovered project data collections alongside registered datasets, including collections with no experiment history. **Run registration** shows whether a collection is configured as a console input set: **Registered**, **Not registered**, or **Inputs unavailable**. Files can be present without registration. Use a registered **Run dataset ID** in `experiments/run.yaml`; ask the operator to register other collections. Registration does not indicate whether submissions are globally enabled. Coordinate files such as CIF and PDB identify structure collections; SIF runtime images are not datasets. Discovery checks file availability; the runner still verifies immutable checksums before execution.
 
 The experiments table loads independently of dataset discovery. If SSH fails, the panel shows an error and lets you retry; it does not substitute an old list. Routine experiment-status polling does not trigger additional dataset scans.
 
-Select **Browse files** on a collection to view its coordinate files, 50 at a time. **Previous** and **Next** fetch that page live from the cluster. Model IDs identify individual coordinate files or systems; they are distinct from the enabled `dataset_id` used to submit a run. Large collections can show an unknown total while their files remain browsable without loading the entire collection into the page.
+Select **Browse files** on a collection to see coordinate filenames and model IDs, 50 at a time. **Previous** and **Next** fetch that page live from the cluster. Model IDs identify individual coordinate files or systems; they are distinct from the registered `dataset_id` used to submit a run. The browser lists filenames rather than file contents. Large collections can show an unknown total while their filenames remain browsable without loading the entire collection into the page.
+
+The project's `structures` directory holds receptor coordinates; `systems` holds the corresponding protein–ligand complexes and separate `ligand_files/*.sdf` files. The coordinate browser lists the complexes' `system.cif` filenames. The `meta` and `meta_strict_v0` directories hold manifest tables, receptor lists, and ligand fingerprints, rather than atomic-coordinate structures. These roles follow the download pipeline; the live filename listing does not chemically validate every molecule. The extractor uses protein atoms and drops ligands, waters, and ions from its surface-embedding input.
 
 | Status | Meaning |
 | --- | --- |

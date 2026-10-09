@@ -1,7 +1,7 @@
 """Public read-only dashboard and a signed, durable GitHub webhook receiver.
 
-The web routes never use cluster credentials. In a single-service deployment,
-web and worker share the same backend filesystem and secret-access boundary.
+Run views read cached state; dataset discovery makes a fixed read-only SSH query.
+Web and worker share the same backend filesystem and secret-access boundary.
 """
 from __future__ import annotations
 
@@ -13,6 +13,8 @@ import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import BoundedSemaphore
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -20,6 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .config import Settings, load_settings
+from .datasets import DatasetDiscoveryError, fetch_dataset_files, fetch_datasets
 from .db import DeliveryConflict, Store
 from .supervisor import maintenance_enabled, supervisor_healthy
 
@@ -154,6 +157,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         store.initialize()
     app = FastAPI(title="dMaSIF research console", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.settings, app.state.store = settings, store
+    dataset_queries = BoundedSemaphore(2)
     directory = Path(__file__).parent
     templates = Jinja2Templates(directory=directory / "templates")
     app.mount("/static", StaticFiles(directory=directory / "static"), name="static")
@@ -329,6 +333,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/runs/{run_id}")
     def detail(request: Request, run_id: str):
         return templates.TemplateResponse(request=request, name="detail.html", context={**detail_data(run_id), "settings": public_settings})
+
+    def dataset_query(fetch, *args):
+        # Keep discovery separate from frequent run polling. Every successful
+        # request reads the cluster anew; concurrent visitors cannot spawn an
+        # unbounded number of SSH processes.
+        if not dataset_queries.acquire(blocking=False):
+            raise HTTPException(503, "Dataset discovery is busy. Please retry shortly.",
+                                headers={"Retry-After": "5"})
+        try:
+            return fetch(settings, *args)
+        except DatasetDiscoveryError:
+            raise HTTPException(503, "Could not fetch datasets from the cluster. Please retry.") from None
+        finally:
+            dataset_queries.release()
+
+    @app.get("/api/datasets")
+    def datasets_api():
+        return dataset_query(fetch_datasets)
+
+    @app.get("/api/datasets/files")
+    def dataset_files_api(
+        scope: Literal["registered", "release", "project"],
+        name: str = Query(min_length=1, max_length=128, pattern=r"^[^/\\\x00-\x1f\x7f]+$"),
+        page: int = Query(default=1, ge=1, le=100_000),
+        page_size: int = Query(default=50, ge=1, le=100),
+    ):
+        if name in {".", ".."} or (scope != "registered" and name.startswith(".")):
+            raise HTTPException(422, "Invalid collection name")
+        return dataset_query(fetch_dataset_files, scope, name, page, page_size)
 
     @app.get("/api/runs")
     def runs_api(actor: str = Query(default="", max_length=100), status: str = Query(default="", max_length=40),

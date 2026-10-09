@@ -127,7 +127,9 @@ dc ps
 
 The initial named state volume gets UID 10001 ownership from the image. Both application services require writes for SQLite WAL; never mount that volume read-only or share it across application hosts. Do not scale the worker. Its process-lifetime file lock rejects a second worker against the same state volume.
 
-Open the HTTPS address without signing in. The public dashboard is read-only; signed GitHub pushes and the approved numeric sender IDs identify and authorize submitters. Web/API requests read local saved state and never perform SSH.
+Open the HTTPS address without signing in. The public dashboard is read-only; signed GitHub pushes and the approved numeric sender IDs identify and authorize submitters. Run views and polling read local saved state. The separate `/api/datasets` endpoint performs a bounded, read-only SSH scan on page load or explicit refresh, with at most two concurrent scans per application process. It uses the existing pinned SSH connection and needs no cluster helper installation. Discovery lists registered input availability, dataset release directories, and coordinate/manifest collections in the project directory containing the managed cluster root. It never registers or enables new datasets, submits jobs, or returns private cluster paths. A failed scan returns an error instead of cached results; a scan reaching its limits is explicitly marked incomplete.
+
+The `/api/datasets/files` endpoint browses coordinate files using a validated collection scope/name and page number. Paths are resolved on the server. The UI requests 50 files per page; large structure and system collections slice candidate names before inspecting files, so distant pages do not reread every earlier model. Symlinks and unavailable files are omitted. A page can contain fewer than 50 files when some candidates are incomplete or unreadable, while later pages remain available. Public model IDs and filenames are relative to their collection and do not enable those models for job submission.
 
 Configure a repository webhook with:
 

@@ -10,6 +10,51 @@
   <a class="primary-button" href="{{ settings.get('instructions_url') }}" target="_blank" rel="noopener noreferrer" title="Open job-submission instructions in the README">How to run an experiment <span aria-hidden="true">↗</span></a>
   {% endif %}
 </section>
+<section class="panel datasets-panel" id="datasets-panel" aria-labelledby="datasets-title">
+  <div class="panel-heading">
+    <div class="section-title"><h2 id="datasets-title">Available datasets</h2><span id="dataset-count" class="count-badge" hidden></span></div>
+    <button class="dataset-refresh" id="refresh-datasets" type="button" aria-controls="datasets-body">Refresh</button>
+  </div>
+  <p class="datasets-note">Project data collections are checked live on page load and refresh. Use an enabled dataset ID in <code>experiments/run.yaml</code>; other collections are visible but not enabled for console runs. Browse files to see individual model IDs and coordinate files.</p>
+  <div class="table-scroll" id="datasets-table" tabindex="0" role="region" aria-label="Available datasets and IDs" hidden>
+    <table class="datasets-table">
+      <thead><tr><th scope="col">Dataset / collection</th><th scope="col">Dataset ID</th><th scope="col">Coordinate files</th><th scope="col">Console runs</th></tr></thead>
+      <tbody id="datasets-body"></tbody>
+    </table>
+  </div>
+  <div class="datasets-message" id="datasets-message" role="status" aria-live="polite" aria-atomic="true">Loading available datasets…</div>
+  <p class="datasets-truncated" id="datasets-truncated" hidden>The cluster scan reached its limit. Some collections or coordinate-file counts may be incomplete.</p>
+  <div class="table-footer" id="datasets-footer" hidden><span id="datasets-checked"></span></div>
+  <section class="dataset-files" id="dataset-files" aria-labelledby="dataset-files-title" hidden>
+    <div class="panel-heading">
+      <h3 id="dataset-files-title" tabindex="-1">Coordinate files</h3>
+      <button class="dataset-refresh" id="close-dataset-files" type="button">Close</button>
+    </div>
+    <p class="datasets-note">Model IDs identify individual structures. Use the collection’s enabled dataset ID to configure a console run.</p>
+    <div class="table-scroll" id="dataset-files-table" tabindex="0" role="region" aria-label="Coordinate files in selected collection" hidden>
+      <table class="dataset-files-table">
+        <thead><tr><th scope="col">Model ID</th><th scope="col">Coordinate file</th><th scope="col">Format</th></tr></thead>
+        <tbody id="dataset-files-body"></tbody>
+      </table>
+    </div>
+    <div class="datasets-message" id="dataset-files-message" role="status" aria-live="polite" aria-atomic="true"></div>
+    <div class="dataset-files-retry" id="dataset-files-retry" hidden><button class="dataset-refresh" id="retry-dataset-files" type="button">Retry</button></div>
+    <p class="datasets-truncated" id="dataset-files-truncated" hidden>The cluster scan reached its limit. Some coordinate files may be missing from this listing.</p>
+    <div class="table-footer dataset-files-footer">
+      <span id="dataset-files-checked"></span>
+      <nav class="dataset-pagination" aria-label="Coordinate file pages">
+        <button class="dataset-refresh" id="previous-dataset-files" type="button" disabled>Previous</button>
+        <form class="dataset-page-form" id="dataset-page-form">
+          <label for="dataset-files-page">Page</label><input id="dataset-files-page" type="number" min="1" max="100000" step="1" value="1" inputmode="numeric" required disabled>
+          <button class="dataset-refresh" id="go-dataset-files" type="submit" disabled>Go</button>
+        </form>
+        <button class="dataset-refresh" id="next-dataset-files" type="button" disabled>Next</button>
+        <span class="dataset-page-size">50 per page</span>
+      </nav>
+    </div>
+  </section>
+  <noscript><p class="datasets-note">Enable JavaScript to fetch the live dataset list.</p></noscript>
+</section>
 <section class="panel history-panel" aria-label="Runs">
   <form class="filter-bar" method="get" action="/" id="run-filters" aria-label="Filter runs">
     <label class="search-field"><span class="sr-only">Search experiment</span><svg width="17" height="17" viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" stroke-width="1.5"/><path d="m13 13 4 4" stroke="currentColor" stroke-width="1.5"/></svg><input type="search" name="experiment" placeholder="Search experiments" value="{{ filters.get('experiment', '') }}" autocomplete="off"></label>

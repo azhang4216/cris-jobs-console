@@ -290,7 +290,7 @@ Poll bounded log tails while jobs run; fetch small validated results automatical
 
 Transfer/cache failure does not change a verified scientific success. Show download pending/unavailable with reason and operator retrieval path. Oversized results stay on the cluster. Evict old local copies within the cap and label them unavailable; no general on-demand transfer queue in v1. Retain metadata. Do not automatically delete cluster results; monitor disk space and pause submissions at a configured low-space threshold.
 
-Minimal routes: authenticated `POST /webhooks/github`; public, read-only `GET /`, `/runs/{id}`, `/api/runs`, `/api/runs/{id}`, `/api/runs/{id}/logs`, `/artifacts/{id}`. Browser polling reads local state and never triggers SSH or GPU work.
+Minimal routes: authenticated `POST /webhooks/github`; public, read-only `GET /`, `/runs/{id}`, `/api/runs`, `/api/runs/{id}`, `/api/runs/{id}/logs`, `/artifacts/{id}`, `/api/datasets`, `/api/datasets/files`. Run polling reads local state and never triggers SSH or GPU work. Dataset discovery and paginated coordinate-file browsing make separate, bounded read-only SSH queries on page load and explicit navigation or refresh. They report available project collections, registered dataset IDs, and relative coordinate filenames without exposing private paths or changing submission policy; errors and incomplete scans remain explicit rather than presenting cached data as fresh.
 
 ## 10. Build sequence and acceptance checks
 

@@ -29,6 +29,11 @@
   let polling = false;
   let pollRequested = false;
   let filterPollTimer;
+  let datasetsLoading = false;
+  let selectedDataset = null;
+  let datasetFilesPage = 1;
+  let datasetFilesController = null;
+  let datasetFilesRequest = 0;
 
   function node(tag, className, value) {
     const element = document.createElement(tag);
@@ -298,6 +303,213 @@
     renderActivity(Array.isArray(data.activity) ? data.activity : []);
   }
 
+  function datasetRowNode(dataset) {
+    const row = node("tr");
+    const identity = node("td");
+    identity.append(node("strong", "", dataset.name || dataset.dataset_id || "Unnamed collection"));
+    if (dataset.description) identity.append(node("span", "cell-secondary", dataset.description));
+    const identifier = node("td");
+    identifier.append(node("span", dataset.dataset_id ? "mono" : "muted", dataset.dataset_id || "Not registered"));
+    const count = Number.isInteger(dataset.file_count) && dataset.file_count >= 0 ? dataset.file_count.toLocaleString() : "—";
+    const files = node("td");
+    const fileCount = node("span", "mono", count);
+    if (count === "—") fileCount.title = "Coordinate-file count unavailable";
+    files.append(fileCount);
+    if (["registered", "release", "project"].includes(dataset.scope)) {
+      const browse = node("button", "dataset-browse", "Browse files");
+      browse.type = "button";
+      browse.disabled = !dataset.available;
+      browse.dataset.scope = dataset.scope;
+      browse.dataset.name = dataset.name;
+      browse.setAttribute("aria-controls", "dataset-files");
+      browse.setAttribute("aria-expanded", "false");
+      browse.setAttribute("aria-label", `Browse files in ${dataset.name}`);
+      browse.addEventListener("click", () => {
+        selectedDataset = { scope: dataset.scope, name: dataset.name };
+        updateDatasetBrowseButtons();
+        document.getElementById("dataset-files-title").textContent = `Coordinate files · ${dataset.name}`;
+        document.getElementById("dataset-files").hidden = false;
+        loadDatasetFiles(1);
+        document.getElementById("dataset-files-title").focus({ preventScroll: true });
+        document.getElementById("dataset-files").scrollIntoView({ block: "nearest" });
+      });
+      files.append(browse);
+    }
+    const state = node("td");
+    const enabled = dataset.available && dataset.enabled && dataset.dataset_id;
+    state.append(node("span", `dataset-status${!dataset.available ? " dataset-unavailable" : enabled ? " dataset-enabled" : ""}`,
+      !dataset.available ? "Unavailable" : enabled ? "Enabled for runs" : "Not enabled for runs"));
+    row.append(identity, identifier, files, state);
+    return row;
+  }
+
+  function updateDatasetBrowseButtons() {
+    document.querySelectorAll(".dataset-browse").forEach((button) => {
+      const expanded = selectedDataset?.scope === button.dataset.scope && selectedDataset?.name === button.dataset.name;
+      button.setAttribute("aria-expanded", String(expanded));
+    });
+  }
+
+  function resetDatasetFiles() {
+    datasetFilesRequest += 1;
+    datasetFilesController?.abort();
+    datasetFilesController = null;
+    selectedDataset = null;
+    datasetFilesPage = 1;
+    document.getElementById("dataset-files").hidden = true;
+    document.getElementById("dataset-files").setAttribute("aria-busy", "false");
+    document.getElementById("dataset-files-body").replaceChildren();
+    updateDatasetBrowseButtons();
+  }
+
+  function datasetFileRowNode(file) {
+    const row = node("tr");
+    row.append(node("td", "mono", file.model_id || "—"), node("td", "mono", file.relative_path || file.name || "—"),
+      node("td", "muted", file.format ? String(file.format).toUpperCase() : "—"));
+    return row;
+  }
+
+  async function loadDatasetFiles(pageNumber) {
+    if (!selectedDataset || datasetsLoading || !Number.isInteger(pageNumber) || pageNumber < 1 || pageNumber > 100000) return;
+    datasetFilesController?.abort();
+    const controller = new AbortController();
+    datasetFilesController = controller;
+    const request = ++datasetFilesRequest;
+    const timeout = setTimeout(() => controller.abort(), 45000);
+    datasetFilesPage = pageNumber;
+    const browser = document.getElementById("dataset-files");
+    const body = document.getElementById("dataset-files-body");
+    const table = document.getElementById("dataset-files-table");
+    const message = document.getElementById("dataset-files-message");
+    const retry = document.getElementById("dataset-files-retry");
+    const previous = document.getElementById("previous-dataset-files");
+    const next = document.getElementById("next-dataset-files");
+    const pageInput = document.getElementById("dataset-files-page");
+    const go = document.getElementById("go-dataset-files");
+    const truncated = document.getElementById("dataset-files-truncated");
+    const checked = document.getElementById("dataset-files-checked");
+    browser.setAttribute("aria-busy", "true");
+    body.replaceChildren();
+    table.hidden = true;
+    retry.hidden = true;
+    previous.disabled = true;
+    next.disabled = true;
+    pageInput.disabled = true;
+    go.disabled = true;
+    truncated.hidden = true;
+    checked.replaceChildren();
+    pageInput.value = String(pageNumber);
+    message.dataset.state = "loading";
+    message.classList.remove("sr-only");
+    message.textContent = "Loading coordinate files…";
+    try {
+      const query = new URLSearchParams({ scope: selectedDataset.scope, name: selectedDataset.name, page: String(pageNumber), page_size: "50" });
+      const response = await fetch(`${apiBase}/api/datasets/files?${query}`, {
+        headers: { Accept: "application/json" }, credentials: "omit", cache: "no-store", signal: controller.signal,
+      });
+      if (!response.ok) throw new Error("Coordinate-file check failed");
+      const data = await response.json();
+      if (request !== datasetFilesRequest) return;
+      if (!Array.isArray(data.files) || data.files.length > 50 || data.page !== pageNumber
+        || !data.files.every((file) => file && typeof file === "object")) throw new Error("Invalid coordinate-file response");
+      body.replaceChildren(...data.files.map(datasetFileRowNode));
+      table.hidden = data.files.length === 0;
+      previous.disabled = pageNumber <= 1;
+      next.disabled = !data.has_more || pageNumber >= 100000;
+      truncated.hidden = !data.truncated;
+      checked.replaceChildren(document.createTextNode(`${data.source === "demo" ? "Demo data" : "Live cluster via SSH"} · Last checked `), timeNode(data.checked_at));
+      message.dataset.state = "ready";
+      message.textContent = data.files.length
+        ? `${data.files.length} coordinate files loaded on page ${pageNumber}${data.truncated ? "; the scan is incomplete" : ""}.`
+        : "No readable coordinate files on this page.";
+      message.classList.toggle("sr-only", data.files.length > 0);
+    } catch (error) {
+      if (request !== datasetFilesRequest) return;
+      message.dataset.state = "error";
+      message.classList.remove("sr-only");
+      message.textContent = controller.signal.aborted
+        ? "The coordinate-file check timed out. Retry to check again."
+        : "Could not load coordinate files. Retry to check the collection again.";
+      retry.hidden = false;
+      previous.disabled = pageNumber <= 1;
+    } finally {
+      clearTimeout(timeout);
+      if (request === datasetFilesRequest) {
+        datasetFilesController = null;
+        browser.setAttribute("aria-busy", "false");
+        pageInput.disabled = false;
+        go.disabled = false;
+      }
+    }
+  }
+
+  // This live SSH inventory is intentionally independent of run polling and filters.
+  async function refreshDatasets() {
+    if (datasetsLoading) return;
+    datasetsLoading = true;
+    resetDatasetFiles();
+    const panel = document.getElementById("datasets-panel");
+    const button = document.getElementById("refresh-datasets");
+    const body = document.getElementById("datasets-body");
+    const table = document.getElementById("datasets-table");
+    const count = document.getElementById("dataset-count");
+    const message = document.getElementById("datasets-message");
+    const footer = document.getElementById("datasets-footer");
+    const truncated = document.getElementById("datasets-truncated");
+    button.disabled = true;
+    button.textContent = "Refreshing…";
+    panel.setAttribute("aria-busy", "true");
+    body.replaceChildren();
+    table.hidden = true;
+    count.hidden = true;
+    footer.hidden = true;
+    truncated.hidden = true;
+    message.dataset.state = "loading";
+    message.classList.remove("sr-only");
+    message.textContent = "Loading available datasets…";
+    let succeeded = false;
+    try {
+      const response = await fetch(`${apiBase}/api/datasets`, {
+        headers: { Accept: "application/json" }, credentials: "omit", cache: "no-store", signal: AbortSignal.timeout(45000),
+      });
+      if (!response.ok) throw new Error("Dataset check failed");
+      const data = await response.json();
+      if (!Array.isArray(data.datasets) || !data.datasets.every((dataset) => dataset && typeof dataset === "object")) {
+        throw new Error("Invalid dataset response");
+      }
+      body.replaceChildren(...data.datasets.map(datasetRowNode));
+      count.textContent = String(data.datasets.length);
+      count.hidden = false;
+      table.hidden = data.datasets.length === 0;
+      truncated.hidden = !data.truncated;
+      const checked = document.getElementById("datasets-checked");
+      checked.replaceChildren(document.createTextNode(`${data.source === "demo" ? "Demo data" : "Live cluster via SSH"} · Last checked `), timeNode(data.checked_at));
+      footer.hidden = false;
+      message.dataset.state = "ready";
+      message.textContent = data.datasets.length
+        ? `${data.datasets.length} datasets and collections loaded${data.truncated ? "; the scan is incomplete" : ""}.`
+        : "No datasets or project data collections were found.";
+      message.classList.toggle("sr-only", data.datasets.length > 0);
+      succeeded = true;
+    } catch (error) {
+      body.replaceChildren();
+      table.hidden = true;
+      count.hidden = true;
+      footer.hidden = true;
+      truncated.hidden = true;
+      message.dataset.state = "error";
+      message.classList.remove("sr-only");
+      message.textContent = error.name === "TimeoutError" || error.name === "AbortError"
+        ? "The live dataset check timed out. Retry to check again."
+        : "Could not load available datasets. Retry to check the cluster again.";
+    } finally {
+      datasetsLoading = false;
+      button.disabled = false;
+      button.textContent = succeeded ? "Refresh" : "Retry";
+      panel.setAttribute("aria-busy", "false");
+    }
+  }
+
   function renderArtifacts(artifacts, source, noJobSubmitted) {
     const fingerprint = JSON.stringify([artifacts, source, noJobSubmitted]);
     if (fingerprint === previousArtifacts) return;
@@ -481,6 +693,20 @@
   }
   refreshMonitoring();
   if (page === "history") {
+    document.getElementById("refresh-datasets").addEventListener("click", refreshDatasets);
+    document.getElementById("retry-dataset-files").addEventListener("click", () => loadDatasetFiles(datasetFilesPage));
+    document.getElementById("previous-dataset-files").addEventListener("click", () => loadDatasetFiles(datasetFilesPage - 1));
+    document.getElementById("next-dataset-files").addEventListener("click", () => loadDatasetFiles(datasetFilesPage + 1));
+    document.getElementById("dataset-page-form").addEventListener("submit", (event) => {
+      event.preventDefault();
+      loadDatasetFiles(document.getElementById("dataset-files-page").valueAsNumber);
+    });
+    document.getElementById("close-dataset-files").addEventListener("click", () => {
+      const browse = document.querySelector('.dataset-browse[aria-expanded="true"]');
+      resetDatasetFiles();
+      browse?.focus({ preventScroll: true });
+    });
+    refreshDatasets();
     const form = document.getElementById("run-filters");
     form.addEventListener("submit", (event) => { event.preventDefault(); onFilterChange(); });
     form.addEventListener("input", onFilterChange);

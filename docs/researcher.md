@@ -1,98 +1,73 @@
-# Run a training experiment
+# Using the training console
 
-Work in [dmasif-experiments](https://github.com/azhang4216/dmasif-experiments#readme), then watch your run in the lab's job console. You do not need an SSH login, a console account, or changes to `cris-jobs-console`. The operator supplies the dashboard URL and approves your GitHub account for submissions.
+**Start with the [dmasif-experiments README](https://github.com/azhang4216/dmasif-experiments#readme).** It explains how to create a branch from `main`, edit your code, test it, and push `runs/<experiment>`. For Nick's local code or another existing experiment, follow [Coming from an existing experiment](https://github.com/azhang4216/dmasif-experiments#coming-from-an-existing-experiment).
 
-Training always uses the existing **dataset_v2**. Evaluation is separate: the existing `valset_v1v2` holdout contains 400 rows across 240 target groups, which are excluded from training. Dataset preparation, surface caches, and PLIP data are already present; no researcher data-selection or rebuilding step is needed.
+Work in the research repository and view results in the console. The operator provides the dashboard URL and approves your GitHub account; no SSH access or console-repository edits are needed. This release is local and unpublished; deployment and real GPU acceptance remain pending.
 
-## Make and submit a change
+## What you can change
 
-Start a new branch from the current research `main`. Old webhook trigger-test branches can stay untouched.
-
-```bash
-git switch main
-git pull --ff-only
-git switch -c runs/my-encoder
-# Edit research code and/or experiments/run.yaml.
-git add src/surface_encoder.py experiments/run.yaml
-# Include every other file your change needs.
-git diff --cached
-git commit -m "Try my encoder change"
-git push -u origin HEAD
-```
-
-| What to change | File in dmasif-experiments |
+| Change | File in dmasif-experiments |
 | --- | --- |
-| Protein encoder, architecture, or pooling | `src/surface_encoder.py` and its helpers |
-| Training computation or losses | `src/train.py` |
-| Batch size, step count, evaluation/save cadence, seed | `experiments/run.yaml` |
-| Research preset or final evaluation behavior | `src/run_experiment.py` |
+| Encoder architecture or pooling | `src/surface_encoder.py` and its helpers |
+| Training logic or losses | `src/train.py` and its helpers |
+| Batch size, step count, evaluation/save intervals, seed | `experiments/run.yaml` |
+| Tests and explanation of your experiment | Relevant tests and documentation |
 
-Include every required helper in your commit. The console saves and executes that commit's code; edits left only on your laptop are not submitted. New dependencies require an operator runtime update.
+Commit every required helper. The console runs the exact pushed commit. New dependencies need an operator runtime update.
 
-Each new qualifying push to `runs/<experiment>` submits its final commit when submissions are enabled. Every run receives a new ID, source snapshot, output directory, and logs. A duplicate webhook reuses the existing run. Pushing multiple commits together submits the final commit once. A documentation-only push to a run branch can also start a job, so develop on an ordinary branch until ready.
+Preserve the `src/run_experiment.py` entrypoint/CLI, fixed dataset wiring, automatic held-out evaluation, required outputs, and telemetry format. These let the console run and monitor your changes. See the [training contract](https://github.com/azhang4216/dmasif-experiments/blob/main/docs/TRAINING_WORKFLOW.md).
 
-Your GitHub account identifies who pushed. Use distinct branch names for independent work; a branch name does not establish ownership or authorization. You may reuse your experiment branch for later changes. To repeat identical code, change `repeat_id`, commit, and push. New runs start fresh and do not automatically resume earlier runs.
+## Data is already prepared
 
-## Configure the run
+Training uses **`data/datasets/dataset_v2/`**: `index.parquet` describes the examples and `inputs.txt` identifies structures. The prepared item list, ligand features, surfaces, and PLIP caches are reused. No dataset selection, paths, or preparation commands are needed.
 
-The research repository already contains `experiments/run.yaml`:
+Evaluation uses the separate **`out/valset_v1v2/`** holdout: 400 rows across 240 target groups excluded from training. Periodic evaluation selects checkpoints; final evaluation of `best.pt` runs automatically. Shared data and caches stay read-only.
 
-```yaml
-schema_version: 1
-job_type: dmasif_train
-dataset_id: dataset_v2
-preset_id: training
-batch_size: 32
-steps: 10000
-eval_every: 125
-save_every: 125
-seed: 0
-repeat_id: first-run
-```
+## Run settings
 
-| Setting | Meaning |
-| --- | --- |
-| `batch_size` | Examples per training batch; integer 2–128. The v8 default is 32. |
-| `steps` | Requested training step target; default 10,000. |
-| `eval_every` | Periodic held-out evaluation interval in steps; default 125. |
-| `save_every` | Checkpoint interval in steps; default 125. |
-| `seed` | Integer random seed, 0–4,294,967,295. |
-| `repeat_id` | Label using letters, numbers, underscores, dots, or hyphens; up to 100 characters. |
+Edit the existing `experiments/run.yaml`:
 
-Keep `schema_version`, `job_type`, `dataset_id`, and `preset_id` as shown. Step counts and intervals must be positive integers, at most 1,000,000. Arbitrary script names, shell commands, cluster paths, and scheduler flags are not accepted in this file. Batch size does not change the one-GPU allocation.
+| Setting | Default | Allowed values |
+| --- | --- | --- |
+| `batch_size` | `32` | Integer 2–128 |
+| `steps` | `10000` | Integer 1–1,000,000 |
+| `eval_every` | `125` | Evaluation interval; integer 1–1,000,000 |
+| `save_every` | `125` | Checkpoint interval; integer 1–1,000,000 |
+| `seed` | `0` | Integer 0–4,294,967,295 |
+| `repeat_id` | `first-run` | 1–100 letters, numbers, underscores, dots, or hyphens |
 
-The scientific defaults come from the existing `src/slurm/train_v8.sbatch` preset; the inspected project has no `train_b8.sbatch`. You do not need to edit or submit Slurm files. The console generates one job and calls the submitted `src/run_experiment.py`, which runs training and then evaluates the best checkpoint automatically.
+Keep `schema_version: 1`, `job_type: dmasif_train`, `dataset_id: dataset_v2`, and `preset_id: training`. Cluster paths, arbitrary commands, and scheduler options are not accepted in this file. Batch size does not change the one-GPU allocation.
 
-## Follow the run
+The defaults follow `src/slurm/train_v8.sbatch`. Researchers do not need to edit or submit Slurm files: the console generates one job for training and final evaluation.
 
-The console's run list shows researcher, commit, training progress, status, and runtime. Open a run for:
+## Read the dashboard
 
-- **Training progress:** current phase, step target, batch size, and every metric reported by the latest training step.
-- **Held-out evaluation:** latest evaluation metrics and a direct link to evaluation history. These measurements are separate from training updates.
-- **Checkpoints:** saved checkpoint names and steps, with a link to the complete checkpoint event history.
-- **Steps, evaluations & checkpoints:** filter by event type, jump to an exact step, or page through older records. All metric fields are retained. **Download all metrics** exports the complete recorded history as JSONL.
-- **Recent logs:** a bounded stdout/stderr tail. Scroll up to stop following; enable **Follow output** to return to new lines. Earlier structured metrics remain available even after their raw log lines leave this tail.
-- **Saved outputs:** validated checkpoints and metric files that are available in the download cache. Uncached large outputs remain on the cluster; contact the operator with the run URL to retrieve them.
+Open your run from the run list:
 
-The page updates automatically and uses your browser's timezone. Delayed monitoring preserves the last known state; it does not imply failure. Older extraction tests remain viewable with their original logs and results, without invented training metrics.
+- **Training progress:** phase, step target, batch size, and every latest training metric.
+- **Held-out evaluation / Checkpoints:** latest results and links to their histories.
+- **Steps, evaluations & checkpoints:** filter by event type, jump to an exact step, or browse older records. **Download all metrics** exports the recorded history as JSONL.
+- **Recent logs:** recent stdout/stderr. Scroll up to pause following; enable **Follow output** to return to new lines. Older structured metrics remain available after raw log lines leave this tail.
+- **Saved outputs:** validated checkpoints and metric files available for download. Ask the operator for large uncached outputs using the run URL.
 
-## Outputs and completion
-
-Required outputs are `best.pt`, `last.pt`, `history.json`, `training-summary.json`, and `evaluation.json`. It also writes per-row final evaluation and append-only telemetry inside its own output directory. Training includes periodic held-out evaluation for checkpoint selection; the final evaluation reads `best.pt` and performs no optimization.
+Updates are automatic; times use your browser's timezone. Delayed monitoring preserves the last known status.
 
 | Status | Meaning |
 | --- | --- |
-| Checking request / preparing | Saving the exact source and validating fixed inputs and settings |
-| Waiting for app slot | Another application run holds the execution slot |
-| Queued on cluster | Slurm is waiting for resources |
-| Running | The job is executing; training/evaluation phase is shown separately |
-| Checking results | The service is validating checkpoint and evaluation evidence |
-| Succeeded | Requested step target reached and every required output validated |
-| Partial | Training time budget ended before the step target; retained checkpoints and held-out evaluation remain available |
-| Failed / timed out / cancelled | The job did not finish successfully; inspect the reason and logs |
-| Rejected / preparation failed | Correct the reported code/configuration issue, then make a new push |
-| Submission uncertain / needs review | Ask the operator to reconcile the existing job before repeating |
+| Checking / preparing / waiting | Saving source, checking inputs, or waiting for an application slot |
+| Queued on cluster | Waiting for a GPU |
+| Running | Executing training or evaluation; the current phase is shown separately |
+| Checking results | Validating checkpoint and evaluation evidence |
+| Succeeded | Requested step target reached and all required outputs validated |
+| Partial | Training budget ended before the step target; checkpoints and evaluation are retained |
+| Failed / timed out / cancelled | Read the reason and logs |
+| Rejected / preparation failed | Correct the reported code/configuration issue before a new push |
+| Submission uncertain / needs review | Ask the operator to check the existing job before repeating |
 
-A zero process exit code or a saved checkpoint alone does not count as a completed experiment. Step metrics follow successful optimizer updates; the trainer can skip unusable batches while its scheduled step index advances. `optimizer_updates` distinguishes those counts in the retained completion evidence.
+Required outputs are `best.pt`, `last.pt`, `history.json`, `training-summary.json`, and `evaluation.json`. Retained step checkpoints and per-row evaluation may also be available. A zero exit code or saved checkpoint alone does not establish success.
 
-For missing submissions, check the branch name and **Push activity** below the run table. For cancellation or an uncertain submission, contact the operator with the run URL. Researchers do not need cluster credentials. Dashboard details and logs may be visible to others, so keep secrets and private notes out of commits and output.
+## Repeat a run or get help
+
+Each qualifying push runs its final commit when submissions are enabled, with fresh outputs and no automatic resume. Reuse your branch for later changes; change `repeat_id` to repeat unchanged code. Duplicate webhooks do not create extra jobs. Leave old trigger-test branches untouched.
+
+Documentation-only pushes to `runs/*` can also start jobs. For missing runs, check **Push activity** and the branch name. For cancellation or uncertain submissions, send the operator the run URL. Keep secrets out of commits and logs; the dashboard may be public.

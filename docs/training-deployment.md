@@ -2,7 +2,7 @@
 
 This guide is for the operator. Researchers use [dmasif-experiments](https://github.com/azhang4216/dmasif-experiments#readme) and the web console; they do not deploy this service or choose dataset paths.
 
-**Status at November 10, 2026:** the VM was inspected read-only. The training adapter, researcher wrapper, and dashboard changes are local implementations. No adapter installation, remote configuration change, dataset rebuild, deployment, or real training job was performed for this update. Activation requires a pinned release and an approved GPU acceptance run.
+**Status at November 10, 2026:** the VM was inspected read-only. The training adapter, researcher wrapper, and dashboard changes are implemented in the repositories. No adapter installation, remote configuration change, dataset rebuild, deployment, or real training job was performed for this update. Activation requires a pinned release and an approved GPU acceptance run.
 
 ## Scientific baseline
 

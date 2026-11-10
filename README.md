@@ -4,7 +4,7 @@ This is the **operator's repository** for the web dashboard and job service.
 
 **To run an experiment, use the [dmasif-experiments README](https://github.com/azhang4216/dmasif-experiments#readme).** Researchers edit code and settings there, push a `runs/*` branch, and follow the run in the web console. They do not need to edit this repository or log in to the VM.
 
-**Release status:** these training changes are local and unpublished. They have not been deployed or validated with a real GPU training submission. The VM inspection was read-only. Publishing, deployment, and GPU acceptance remain operator steps in the [training deployment guide](docs/training-deployment.md).
+**Release status:** this repository contains the training integration. Operator deployment and validation with a real GPU training submission are still pending. The VM inspection was read-only. See the [training deployment guide](docs/training-deployment.md) for activation and GPU acceptance steps.
 
 ## What the console does
 

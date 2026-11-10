@@ -2,7 +2,7 @@
 
 **Start with the [dmasif-experiments README](https://github.com/azhang4216/dmasif-experiments#readme).** It explains how to create a branch from `main`, edit your code, test it, and push `runs/<experiment>`. For Nick's local code or another existing experiment, follow [Coming from an existing experiment](https://github.com/azhang4216/dmasif-experiments#coming-from-an-existing-experiment).
 
-Work in the research repository and view results in the console. The operator provides the dashboard URL and approves your GitHub account; no SSH access or console-repository edits are needed. This release is local and unpublished; deployment and real GPU acceptance remain pending.
+Work in the research repository and view results in the console. The operator provides the dashboard URL and approves your GitHub account; no SSH access or console-repository edits are needed. Operator activation and real GPU acceptance for this release remain pending.
 
 ## What you can change
 

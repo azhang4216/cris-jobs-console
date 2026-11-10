@@ -132,12 +132,20 @@ class Worker:
             run = self._update(run, config=config, original_config=original)
             policy = run.get("policy") or self.settings.policy_snapshot()
             datasets, presets = policy["datasets"], policy["presets"]
+            training = config.get("job_type") == "dmasif_train"
             if config["dataset_id"] not in datasets:
+                if training:
+                    raise SourceError("Training dataset_id dataset_v2 is not registered on the server. "
+                                      "The operator must update deployment configuration. "
+                                      "Keep dataset_id: dataset_v2 in experiments/run.yaml; no cluster job was submitted.")
                 raise ExperimentConfigError([{"sample": "experiments/run.yaml.dataset_id",
                                               "reason": "Unknown dataset_id. Select an operator-approved immutable dataset; ask the lab operator for its registered ID."}], original)
             if config["preset_id"] not in presets:
+                if training:
+                    raise SourceError("The training resource preset is not registered on the server. "
+                                      "The operator must update deployment configuration. "
+                                      "Keep preset_id: training in experiments/run.yaml; no cluster job was submitted.")
                 raise SourceError("Unknown preset_id; select an operator-approved resource preset.")
-            training = config.get("job_type") == "dmasif_train"
             if training != (datasets[config["dataset_id"]].get("kind") == "training"):
                 raise SourceError("The dataset_id does not match the selected job type.")
             if training != (presets[config["preset_id"]].get("kind") == "training"):

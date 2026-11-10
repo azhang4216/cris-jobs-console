@@ -107,6 +107,34 @@ def test_training_source_requires_wrapper_without_extraction_entrypoint(tmp_path
     assert read_experiment(snapshot)[0]["batch_size"] == 16
 
 
+@pytest.mark.parametrize("missing,setting", [("datasets", "dataset_id: dataset_v2"), ("presets", "preset_id: training")])
+def test_missing_training_registration_explains_server_configuration_without_submitting(tmp_path, monkeypatch, missing, setting):
+    settings = settings_for(tmp_path)
+    policy = settings.policy_snapshot()
+    policy[missing] = {}
+    source = source_archive(tmp_path)
+    monkeypatch.setattr("dmasif_console.worker.snapshot_source", lambda *_: source)
+    monkeypatch.setattr("dmasif_console.worker.read_experiment", lambda *_: (config(steps=10), "fixture"))
+    store = Store(settings.database_path)
+    store.initialize()
+    adapter = FakeAdapter(settings)
+    def must_not_stage(*args):
+        pytest.fail("An unregistered training request must never reach the cluster")
+    monkeypatch.setattr(adapter, "stage", must_not_stage)
+    response = store.accept_delivery("hook", "missing-registration", hashlib.sha256(b"missing").hexdigest(), {},
+                                    "ACCEPTED", "", {"commit_sha": "a" * 40, "actor_login": "scientist",
+                                                     "policy": policy, "state": "CHECKING_REQUEST"})
+    worker = Worker(settings, store, adapter)
+    worker.tick()
+    run = store.get_run(response["run_id"])
+    assert run["state"] == "REJECTED"
+    assert "not registered on the server" in run["reason"]
+    assert "operator must update deployment configuration" in run["reason"]
+    assert "Keep " + setting in run["reason"]
+    assert "Invalid experiments/run.yaml" not in run["reason"]
+    assert store.jobs(run["id"]) == [] and not run.get("capacity_reserved")
+
+
 def test_helper_training_stages_only_normalized_items_and_detects_mutation(tmp_path):
     settings = settings_for(tmp_path)
     run = _prepared_run(run_for(settings))

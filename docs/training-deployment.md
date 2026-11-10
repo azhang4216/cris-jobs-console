@@ -2,7 +2,13 @@
 
 This guide is for the operator. Researchers use [dmasif-experiments](https://github.com/azhang4216/dmasif-experiments#readme) and the web console; they do not deploy this service or choose dataset paths.
 
-**Status at November 10, 2026:** the VM was inspected read-only. The training adapter, researcher wrapper, and dashboard changes are implemented in the repositories. No adapter installation, remote configuration change, dataset rebuild, deployment, or real training job was performed for this update. Activation requires a pinned release and an approved GPU acceptance run.
+**Status at November 10, 2026:** the source changes are published, the updated dashboard is deployed, and the reviewed training adapter is installed on the cluster. The first `runs/training-smoke` push reached the console but was rejected because the deployed operator configuration did not register `dataset_v2`. No GPU job was submitted. Updating the live configuration, clearing its existing submission pause, and completing GPU acceptance remain pending. The datasets have not been rebuilt or modified.
+
+## Why a code deployment does not register the dataset
+
+The application code comes from this repository. On Render, its private dataset/runtime configuration comes from `DMASIF_OPERATOR_YAML`, which bootstrap writes to the file named by `DMASIF_CONFIG`. Redeploying `main` loads the same environment value until the operator updates it. This keeps site-specific paths, approved users, and pinned data/runtime identities under operator control.
+
+The submission pause is separate: it is retained in SQLite across deployments. After installing the runner and updating the configuration, the operator enables `submissions_enabled` and clears the pause with `dmasif-console resume`. A rejected request has no cluster job; retry with a new commit after setup is corrected. Redelivering the same webhook preserves its existing rejected record.
 
 ## Scientific baseline
 

@@ -11,6 +11,7 @@
   };
   const attentionStates = new Set(["SUBMISSION_UNKNOWN", "NEEDS_REVIEW", "PREPARATION_FAILED", "REJECTED", "PARTIAL", "FAILED", "TIMED_OUT"]);
   const monitoredStates = new Set(["QUEUED", "RUNNING", "SUBMITTING", "SUBMISSION_UNKNOWN", "VALIDATING_RESULTS"]);
+  const terminalStates = new Set(["REJECTED", "PREPARATION_FAILED", "SUCCEEDED", "PARTIAL", "FAILED", "CANCELLED", "TIMED_OUT", "COMPLETED"]);
   const page = document.body.dataset.page;
   const apiBase = (document.body.dataset.apiBaseUrl || "").replace(/\/$/, "");
   const pollMilliseconds = Math.max(3000, Number(document.body.dataset.pollSeconds || 15) * 1000);
@@ -57,6 +58,32 @@
     return run?.config?.job_type === "dmasif_train" || Boolean(training.phase || training.event_count);
   }
 
+  function hasTrainingData(run) {
+    const training = run?.training || {};
+    return Boolean(training.event_count || training.last_event_at || training.phase
+      || training.step !== null && training.step !== undefined
+      || Object.keys(training.latest_metrics || {}).length
+      || Object.keys(training.latest_evaluation || {}).length || training.checkpoints?.length);
+  }
+
+  function noSubmittedJob(run, jobs = []) {
+    return ["REJECTED", "PREPARATION_FAILED"].includes(run.state)
+      && !run.submitted_at && !run.started_at && !run.scheduler_job_id && jobs.length === 0;
+  }
+
+  function trainingStoppedEmpty(run) {
+    return terminalStates.has(run?.state) && !hasTrainingData(run);
+  }
+
+  function trainingPlaceholder(run) {
+    if (noSubmittedJob(run) && !hasTrainingData(run)) {
+      return run.state === "REJECTED" ? "Not started · rejected" : "Not started · preparation failed";
+    }
+    if (terminalStates.has(run.state)) return "No training metrics";
+    return { RUNNING: "Waiting for first metrics", SUBMISSION_UNKNOWN: "Submission uncertain",
+      NEEDS_REVIEW: "Awaiting review", VALIDATING_RESULTS: "Collecting results" }[run.state] || "Waiting for training";
+  }
+
   function phaseLabel(phase) {
     const phases = { training: "Training", evaluation: "Evaluating held-out data", checkpoint: "Saving checkpoint", completed: "Completed", starting: "Starting" };
     return phases[phase] || String(phase || "Waiting to start").replaceAll("_", " ");
@@ -78,10 +105,26 @@
     });
   }
 
-  function renderTraining(run) {
+  function renderTraining(run, noJobSubmitted) {
     const enabled = isTraining(run);
+    const stoppedEmpty = enabled && trainingStoppedEmpty(run);
+    const terminal = terminalStates.has(run.state);
     for (const id of ["training-overview", "evaluation-panel", "checkpoints-panel", "training-events-panel"]) {
-      document.getElementById(id).hidden = !enabled;
+      document.getElementById(id).hidden = !enabled || stoppedEmpty;
+    }
+    document.getElementById("training-stopped").hidden = !stoppedEmpty;
+    document.getElementById("training-stopped-title").textContent = noJobSubmitted ? "Training did not start" : "No training metrics recorded";
+    document.getElementById("training-stopped-context").textContent = noJobSubmitted
+      ? "No cluster job was submitted." : "This run has ended without recorded training progress.";
+    const stoppedReason = document.getElementById("training-stopped-reason");
+    stoppedReason.hidden = !run.reason;
+    stoppedReason.textContent = run.reason || "";
+    if (stoppedEmpty && trainingEventsController) {
+      // Ignore any late response from a metrics request made before rejection.
+      trainingEventsRequest += 1;
+      trainingEventsController.abort();
+      trainingEventsController = null;
+      document.getElementById("training-events-panel").setAttribute("aria-busy", "false");
     }
     document.getElementById("legacy-training-note").hidden = enabled;
     const batch = run.config?.batch_size;
@@ -89,12 +132,14 @@
     document.getElementById("detail-batch").textContent = Number.isInteger(batch) ? String(batch) : "—";
     if (!enabled) return;
     const training = run.training || {};
-    const fingerprint = JSON.stringify([training, batch]);
+    const fingerprint = JSON.stringify([training, batch, run.state]);
     if (fingerprint === previousTrainingSummary) return;
     previousTrainingSummary = fingerprint;
     const step = Number.isInteger(training.step) ? training.step : null;
     const total = Number.isInteger(training.total_steps) && training.total_steps > 0 ? training.total_steps : null;
-    document.getElementById("training-phase").textContent = phaseLabel(training.phase);
+    document.getElementById("training-phase").textContent = terminal
+      ? (training.phase ? `Last reported: ${phaseLabel(training.phase)}` : labels[run.state] || "Ended")
+      : phaseLabel(training.phase);
     document.getElementById("training-step").textContent = step === null ? "—" : `${step.toLocaleString()}${total ? ` / ${total.toLocaleString()}` : ""}`;
     document.getElementById("training-batch").textContent = Number.isInteger(batch) ? String(batch) : "—";
     document.getElementById("training-updated").replaceChildren(timeNode(training.last_event_at));
@@ -108,18 +153,22 @@
     const metrics = metricNodes(training.latest_metrics);
     document.getElementById("latest-metrics").replaceChildren(...metrics);
     document.getElementById("latest-metrics-empty").hidden = metrics.length > 0;
+    document.getElementById("latest-metrics-empty").textContent = terminal
+      ? "No training-step metrics were recorded." : "Metrics will appear when the first training step is reported.";
     const evaluation = training.latest_evaluation || {};
     document.getElementById("evaluation-metrics").replaceChildren(...metricNodes(evaluation.metrics));
     const context = document.getElementById("evaluation-context");
     if (Object.keys(evaluation).length) {
       context.replaceChildren(document.createTextNode(`Step ${evaluation.step ?? "—"} · `), timeNode(evaluation.timestamp));
-    } else context.textContent = "Evaluation runs automatically on held-out data, separately from training.";
+    } else context.textContent = terminal ? "No held-out evaluation was recorded."
+      : "Evaluation runs automatically on held-out data, separately from training.";
     const checkpoints = (Array.isArray(training.checkpoints) ? training.checkpoints : []).map((checkpoint) => {
       const item = node("li");
       item.append(node("strong", "mono", checkpoint.name || "Checkpoint"), node("span", "", `Step ${checkpoint.step ?? "—"}`), timeNode(checkpoint.timestamp));
       return item;
     });
-    document.getElementById("training-checkpoints").replaceChildren(...(checkpoints.length ? checkpoints : [node("li", "muted", "No checkpoint reported yet.")]));
+    document.getElementById("training-checkpoints").replaceChildren(...(checkpoints.length ? checkpoints
+      : [node("li", "muted", terminal ? "No checkpoint was recorded." : "No checkpoint reported yet.")]));
   }
 
   function trainingEventRow(event) {
@@ -146,7 +195,7 @@
   }
 
   async function loadTrainingEvents({ reset = false, refresh = false, pageChange = false } = {}) {
-    if (!isTraining(latestDetailRun)) return;
+    if (!isTraining(latestDetailRun) || trainingStoppedEmpty(latestDetailRun)) return;
     // Polling never moves a researcher away from an older page they are reading.
     if (refresh && (trainingBefore !== null || trainingEventsController)) return;
     if (reset) {
@@ -202,9 +251,11 @@
       trainingNextBefore = Number.isInteger(data.next_before_seq) ? data.next_before_seq : null;
       document.getElementById("training-events-table").hidden = data.events.length === 0;
       message.hidden = data.events.length > 0;
+      const ended = terminalStates.has(latestDetailRun.state);
       message.textContent = trainingKind || trainingStep !== ""
-        ? "No events match these filters yet. Try another step or event type."
-        : "No training events yet. Steps, evaluations, and checkpoints appear here as they are reported.";
+        ? `No events match these filters${ended ? "" : " yet"}. Try another step or event type.`
+        : ended ? "No retained training events are available."
+          : "No training events yet. Steps, evaluations, and checkpoints appear here as they are reported.";
       const total = Number.isInteger(data.total) ? ` of ${data.total.toLocaleString()} matching events` : " events";
       document.getElementById("training-events-count").textContent = `${data.events.length}${total} · ${trainingBefore === null ? "newest first" : "older events; page held while live updates continue"}`;
     } catch (error) {
@@ -395,7 +446,14 @@
     if (Number.isInteger(training.step)) {
       progress.append(node("span", "mono", `Step ${training.step.toLocaleString()}${Number.isInteger(training.total_steps) ? ` / ${training.total_steps.toLocaleString()}` : ""}`));
       if (training.phase) progress.append(node("span", "cell-secondary", phaseLabel(training.phase)));
-    } else progress.append(node("span", "muted", isTraining(run) ? "Waiting for training" : "—"));
+    } else {
+      progress.append(node("span", "muted", isTraining(run) ? trainingPlaceholder(run) : "—"));
+      if (isTraining(run) && ["REJECTED", "PREPARATION_FAILED"].includes(run.state) && run.reason) {
+        const reason = node("span", "status-reason", run.reason);
+        reason.title = run.reason;
+        progress.append(reason);
+      }
+    }
     const state = node("td"); state.append(statusNode(run.state, run));
     const received = node("td", "nowrap time-cell"); received.append(timeNode(run.source_kind === "slurm" ? run.submitted_at : run.created_at));
     const runtime = node("td", "mono runtime-cell"); runtime.dataset.runtime = ""; updateRuntime(runtime, run);
@@ -603,13 +661,13 @@
     document.getElementById("detail-status").replaceChildren(statusNode(run.state, run));
     renderDetailMonitoring(run);
     const jobs = Array.isArray(data.jobs) ? data.jobs : [];
-    const noJobSubmitted = ["REJECTED", "PREPARATION_FAILED"].includes(run.state) && !run.submitted_at && jobs.length === 0;
+    const noJobSubmitted = noSubmittedJob(run, jobs);
     document.querySelectorAll("[data-timing]").forEach((element) => {
       element.replaceChildren(timeNode(run[element.dataset.timing]));
     });
     document.querySelectorAll("[data-runtime]").forEach((element) => updateRuntime(element, run));
     document.getElementById("detail-dataset").textContent = run.dataset_id || "—";
-    renderTraining(run);
+    renderTraining(run, noJobSubmitted);
     for (const key of ["validation", "config", "provenance"]) {
       document.getElementById(`${key}-json`).textContent = JSON.stringify(key === "provenance" ? publicProvenance(run[key]) : (run[key] || {}), null, 2);
     }
@@ -647,7 +705,7 @@
         await loadTrainingEvents({ refresh: true });
         if (typeof data.run?.log_tail !== "string") {
           const logs = await getJSON(`/api/runs/${encodeURIComponent(id)}/logs`);
-          const noJobSubmitted = ["REJECTED", "PREPARATION_FAILED"].includes(data.run.state) && !data.run.submitted_at && !data.jobs?.length;
+          const noJobSubmitted = noSubmittedJob(data.run, data.jobs || []);
           renderLogs(logs.text, logs.last_observed_at, data.run.source_kind, noJobSubmitted);
         }
       }

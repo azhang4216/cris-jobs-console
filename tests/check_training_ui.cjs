@@ -125,6 +125,52 @@ const event = (seq, kind = "step", step = seq) => ({ schema_version: 1, seq, kin
   ui.respond([]); await nextPoll; await flush();
   assert.equal(output.scrollTop, 50, "Paused log position survives live updates");
 
+  // A final scheduler state must update placeholders even when telemetry is unchanged.
+  const failedRun = structuredClone(run);
+  failedRun.state = "FAILED";
+  failedRun.training.latest_evaluation = {};
+  failedRun.training.checkpoints = [];
+  ui.setRun(failedRun);
+  const failedPoll = ui.timers.findLast(({ delay }) => delay === 15000).callback(); await flush();
+  ui.respond([event(80)]); await failedPoll; await flush();
+  assert.equal(ui.el("training-overview").hidden, false);
+  assert.equal(ui.el("training-events-panel").hidden, false, "Failure preserves recorded telemetry");
+  assert.equal(ui.el("training-stopped").hidden, true);
+  assert.match(ui.el("training-phase").textContent, /Last reported/);
+  assert.equal(ui.el("evaluation-context").textContent, "No held-out evaluation was recorded.");
+  assert.equal(ui.el("training-checkpoints").textContent, "No checkpoint was recorded.");
+
+  const queuedRun = { id: "blocked", state: "QUEUED", config: { job_type: "dmasif_train", batch_size: 8 }, training: {} };
+  const blocked = setup("detail", queuedRun); await flush();
+  blocked.respond([]); await flush();
+  assert.equal(blocked.el("training-overview").hidden, false);
+  assert.equal(blocked.el("training-stopped").hidden, true);
+  assert.match(blocked.el("latest-metrics-empty").textContent, /will appear/);
+  const rejected = { ...queuedRun, state: "REJECTED", reason: `dataset_v2 is not registered. ${attack}` };
+  blocked.setRun(rejected);
+  const eventRequests = blocked.requests.filter(({ url }) => url.includes("/training-events?")).length;
+  await blocked.timers.findLast(({ delay }) => delay === 15000).callback(); await flush();
+  assert.equal(blocked.el("training-stopped").hidden, false);
+  assert.equal(blocked.el("training-stopped-title").textContent, "Training did not start");
+  assert.equal(blocked.el("training-stopped-context").textContent, "No cluster job was submitted.");
+  assert.equal(blocked.el("training-stopped-reason").textContent, rejected.reason);
+  assert.equal(blocked.w.document.querySelectorAll("img").length, 0);
+  for (const id of ["training-overview", "evaluation-panel", "checkpoints-panel", "training-events-panel"]) {
+    assert.equal(blocked.el(id).hidden, true, "Unsubmitted rejection hides empty training panels");
+  }
+  assert.equal(blocked.requests.filter(({ url }) => url.includes("/training-events?")).length, eventRequests);
+
+  const blockedHistory = setup("history", queuedRun); await flush();
+  assert.match(blockedHistory.el("runs-body").textContent, /Waiting for training/);
+  blockedHistory.setRun(rejected);
+  await blockedHistory.timers.findLast(({ delay }) => delay === 15000).callback(); await flush();
+  assert.match(blockedHistory.el("runs-body").textContent, /Not started · rejected/);
+  assert.match(blockedHistory.el("runs-body").textContent, /dataset_v2 is not registered/);
+  assert.doesNotMatch(blockedHistory.el("runs-body").textContent, /Waiting for training/);
+  blockedHistory.setRun({ ...rejected, state: "PREPARATION_FAILED" });
+  await blockedHistory.timers.findLast(({ delay }) => delay === 15000).callback(); await flush();
+  assert.match(blockedHistory.el("runs-body").textContent, /Not started · preparation failed/);
+
   const older = setup("detail", { id: "old", state: "SUCCEEDED", config: { job_type: "dmasif_extract" }, training: {}, artifacts: [] });
   await flush();
   assert.equal(older.pending.length, 0);
@@ -134,6 +180,6 @@ const event = (seq, kind = "step", step = seq) => ({ schema_version: 1, seq, kin
   assert.equal(history.el("datasets-panel"), null);
   assert.match(history.el("runs-body").textContent, /Step 200/);
   assert.equal(history.requests.length, 1);
-  for (const context of [ui, older, history]) context.w.close();
+  for (const context of [ui, older, history, blocked, blockedHistory]) context.w.close();
   console.log("Training UI DOM checks passed: metric safety, paging, filters, retries, race handling, log follow, and legacy runs.");
 })().catch((error) => { console.error(error); process.exitCode = 1; });

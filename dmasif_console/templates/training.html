@@ -2,9 +2,18 @@
 {% set config = run.get('config') or {} %}
 {% set is_training = config.get('job_type') == 'dmasif_train' or training.get('phase') or training.get('event_count') %}
 {% set evaluation = training.get('latest_evaluation') or {} %}
+{% set training_terminal = run.get('state') in ['REJECTED', 'PREPARATION_FAILED', 'SUCCEEDED', 'PARTIAL', 'FAILED', 'CANCELLED', 'TIMED_OUT', 'COMPLETED'] %}
+{% set has_training_data = training.get('event_count') or training.get('last_event_at') or training.get('phase') or training.get('step') is not none or training.get('latest_metrics') or evaluation or training.get('checkpoints') %}
+{% set training_stopped_empty = is_training and training_terminal and not has_training_data %}
+{% set show_training = is_training and not training_stopped_empty %}
 <p class="small-note legacy-training-note" id="legacy-training-note" {% if is_training %}hidden{% endif %}>This older run has no training metrics. Its logs and saved outputs are below.</p>
-<section class="panel training-overview" id="training-overview" aria-labelledby="training-title" {% if not is_training %}hidden{% endif %}>
-  <div class="panel-heading"><h2 id="training-title">Training progress</h2><span class="training-phase" id="training-phase">{{ (training.get('phase') or 'Waiting to start')|replace('_', ' ')|capitalize }}</span></div>
+<section class="panel" id="training-stopped" aria-labelledby="training-stopped-title" {% if not training_stopped_empty %}hidden{% endif %}>
+  <div class="panel-heading"><h2 id="training-stopped-title">{{ 'Training did not start' if no_job_submitted else 'No training metrics recorded' }}</h2></div>
+  <p class="training-note" id="training-stopped-context">{{ 'No cluster job was submitted.' if no_job_submitted else 'This run has ended without recorded training progress.' }}</p>
+  <p class="training-note" id="training-stopped-reason" {% if not run.get('reason') %}hidden{% endif %}>{{ run.get('reason') or '' }}</p>
+</section>
+<section class="panel training-overview" id="training-overview" aria-labelledby="training-title" {% if not show_training %}hidden{% endif %}>
+  <div class="panel-heading"><h2 id="training-title">Training progress</h2><span class="training-phase" id="training-phase">{% if training_terminal and training.get('phase') %}Last reported: {{ training.get('phase')|replace('_', ' ')|capitalize }}{% else %}{{ (training.get('phase') or (status_labels.get(run.get('state'), run.get('state', 'Ended')) if training_terminal else 'Waiting to start'))|replace('_', ' ')|capitalize }}{% endif %}</span></div>
   <div class="training-summary">
     <div><span>Training steps</span><strong class="mono" id="training-step">{% if training.get('step') is not none %}{{ training.get('step') }}{% if training.get('total_steps') %} / {{ training.get('total_steps') }}{% endif %}{% else %}—{% endif %}</strong></div>
     <div><span>Batch size</span><strong class="mono" id="training-batch">{{ config.get('batch_size', '—') }}</strong></div>
@@ -14,25 +23,25 @@
   <p class="training-note" id="training-complete-reason" {% if not training.get('complete_reason') %}hidden{% endif %}>{{ training.get('complete_reason') or '' }}</p>
   <div class="metrics-heading"><h3>Latest training metrics</h3></div>
   <dl class="metric-grid" id="latest-metrics">{% for key, value in (training.get('latest_metrics') or {}).items() %}<div><dt>{{ key }}</dt><dd class="mono">{{ value if value is not none else '—' }}</dd></div>{% endfor %}</dl>
-  <p class="training-note" id="latest-metrics-empty" {% if training.get('latest_metrics') %}hidden{% endif %}>Metrics will appear when the first training step is reported.</p>
+  <p class="training-note" id="latest-metrics-empty" {% if training.get('latest_metrics') %}hidden{% endif %}>{{ 'No training-step metrics were recorded.' if training_terminal else 'Metrics will appear when the first training step is reported.' }}</p>
 </section>
-<section class="panel" id="evaluation-panel" aria-labelledby="evaluation-title" {% if not is_training %}hidden{% endif %}>
+<section class="panel" id="evaluation-panel" aria-labelledby="evaluation-title" {% if not show_training %}hidden{% endif %}>
   <div class="panel-heading"><h2 id="evaluation-title">Held-out evaluation</h2><button type="button" class="text-button" id="view-evaluations">View evaluation history</button></div>
-  <p class="training-note" id="evaluation-context">{% if evaluation %}Step {{ evaluation.get('step', '—') }} · {{ timestamp(evaluation.get('timestamp')) }}{% else %}Evaluation runs automatically on held-out data, separately from training.{% endif %}</p>
+  <p class="training-note" id="evaluation-context">{% if evaluation %}Step {{ evaluation.get('step', '—') }} · {{ timestamp(evaluation.get('timestamp')) }}{% else %}{{ 'No held-out evaluation was recorded.' if training_terminal else 'Evaluation runs automatically on held-out data, separately from training.' }}{% endif %}</p>
   <dl class="metric-grid" id="evaluation-metrics">{% for key, value in (evaluation.get('metrics') or {}).items() %}<div><dt>{{ key }}</dt><dd class="mono">{{ value if value is not none else '—' }}</dd></div>{% endfor %}</dl>
 </section>
-<section class="panel" id="checkpoints-panel" aria-labelledby="checkpoints-title" {% if not is_training %}hidden{% endif %}>
+<section class="panel" id="checkpoints-panel" aria-labelledby="checkpoints-title" {% if not show_training %}hidden{% endif %}>
   <div class="panel-heading"><h2 id="checkpoints-title">Checkpoints</h2><button type="button" class="text-button" id="view-checkpoints">View checkpoint history</button></div>
-  <ul class="checkpoint-list" id="training-checkpoints">{% for checkpoint in training.get('checkpoints') or [] %}<li><strong class="mono">{{ checkpoint.get('name') or 'Checkpoint' }}</strong><span>Step {{ checkpoint.get('step', '—') }}</span>{{ timestamp(checkpoint.get('timestamp')) }}</li>{% else %}<li class="muted">No checkpoint reported yet.</li>{% endfor %}</ul>
+  <ul class="checkpoint-list" id="training-checkpoints">{% for checkpoint in training.get('checkpoints') or [] %}<li><strong class="mono">{{ checkpoint.get('name') or 'Checkpoint' }}</strong><span>Step {{ checkpoint.get('step', '—') }}</span>{{ timestamp(checkpoint.get('timestamp')) }}</li>{% else %}<li class="muted">{{ 'No checkpoint was recorded.' if training_terminal else 'No checkpoint reported yet.' }}</li>{% endfor %}</ul>
 </section>
-<section class="panel training-events-panel" id="training-events-panel" aria-labelledby="training-events-title" {% if not is_training %}hidden{% endif %}>
+<section class="panel training-events-panel" id="training-events-panel" aria-labelledby="training-events-title" {% if not show_training %}hidden{% endif %}>
   <div class="panel-heading"><div class="section-title"><h2 id="training-events-title" tabindex="-1">Steps, evaluations &amp; checkpoints</h2></div><a class="download-link" id="download-training-events" href="{{ settings.get('api_base_url', '') }}/api/runs/{{ run.get('id')|urlencode }}/training-events/download">Download all metrics ↓</a></div>
   <form class="training-filters" id="training-filters" aria-label="Filter training events">
     <label for="training-kind">Show<select id="training-kind" name="kind"><option value="">All events</option><option value="step">Training steps</option><option value="evaluation">Evaluations</option><option value="checkpoint">Checkpoints</option></select></label>
     <label for="training-step-filter">Go to step<input id="training-step-filter" name="step" type="number" min="0" step="1" inputmode="numeric" placeholder="Any step"></label>
     <button type="submit" class="quiet-button">Apply</button><button type="reset" class="text-button">Clear filters</button>
   </form>
-  <div class="training-events-message" id="training-events-message" role="status" aria-live="polite">Waiting for training events…</div>
+  <div class="training-events-message" id="training-events-message" role="status" aria-live="polite">{{ 'Loading recorded training events…' if training_terminal else 'Waiting for training events…' }}</div>
   <div class="table-scroll training-events-scroll" id="training-events-table" tabindex="0" role="region" aria-label="Training events and every reported metric" hidden>
     <table class="training-events-table"><thead><tr><th scope="col">Step</th><th scope="col">Event</th><th scope="col">Recorded</th><th scope="col">Metrics &amp; details</th></tr></thead><tbody id="training-events-body"></tbody></table>
   </div>

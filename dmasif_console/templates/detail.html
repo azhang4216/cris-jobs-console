@@ -4,7 +4,7 @@
 {% block page %}detail{% endblock %}
 {% block content %}
 {% set needs_help = run.get('state') in ['SUBMISSION_UNKNOWN', 'NEEDS_REVIEW', 'PREPARATION_FAILED', 'REJECTED', 'PARTIAL', 'FAILED', 'TIMED_OUT'] %}
-{% set no_job_submitted = run.get('state') in ['REJECTED', 'PREPARATION_FAILED'] and not run.get('submitted_at') and not jobs %}
+{% set no_job_submitted = run.get('state') in ['REJECTED', 'PREPARATION_FAILED'] and not run.get('submitted_at') and not run.get('started_at') and not run.get('scheduler_job_id') and not jobs %}
 <div id="run-detail" data-run-id="{{ run.get('id') }}">
   <a href="/" class="back-link"><span aria-hidden="true">←</span> All runs</a>
   <section class="page-heading detail-heading">

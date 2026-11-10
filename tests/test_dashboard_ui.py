@@ -150,3 +150,48 @@ def test_training_metrics_and_checkpoint_names_are_escaped(templates, common):
     page = templates.get_template("detail.html").render(**common, run=run, jobs=[], events=[])
     assert attack not in page
     assert "&lt;img" in page
+
+
+@pytest.mark.parametrize("state,label", [
+    ("REJECTED", "Not started · rejected"),
+    ("PREPARATION_FAILED", "Not started · preparation failed"),
+])
+def test_unsubmitted_training_failure_shows_reason_instead_of_waiting(templates, common, state, label):
+    reason = 'Server dataset configuration is missing <private>'
+    run = {"id": "blocked", "state": state, "reason": reason,
+           "config": {"job_type": "dmasif_train", "batch_size": 8}, "training": None}
+    history = templates.get_template("history.html").render(
+        **common, runs=[run], activity=[], stats={}, filters={},
+    )
+    assert label in history
+    assert "Waiting for training" not in history
+    assert "Server dataset configuration is missing &lt;private&gt;" in history
+    detail = templates.get_template("detail.html").render(**common, run=run, jobs=[], events=[])
+    assert 'id="training-stopped-title">Training did not start</h2>' in detail
+    assert 'id="training-stopped-context">No cluster job was submitted.</p>' in detail
+    assert 'id="training-stopped-reason" >Server dataset configuration is missing &lt;private&gt;</p>' in detail
+    assert "hidden" not in detail.split('id="training-stopped"', 1)[1].split(">", 1)[0]
+    for panel in ("training-overview", "evaluation-panel", "checkpoints-panel", "training-events-panel"):
+        assert "hidden" in detail.split(f'id="{panel}"', 1)[1].split(">", 1)[0]
+
+
+@pytest.mark.parametrize("state", ["FAILED", "CANCELLED", "TIMED_OUT", "PARTIAL"])
+def test_terminal_training_keeps_recorded_steps_and_uses_past_tense(templates, common, state):
+    run = {"id": "stopped", "state": state, "submitted_at": "2026-11-10T17:00:00Z",
+           "config": {"job_type": "dmasif_train"},
+           "training": {"event_count": 3, "step": 2, "phase": "training", "latest_metrics": {"loss": 0.5}}}
+    page = templates.get_template("detail.html").render(**common, run=run, jobs=[], events=[])
+    assert "hidden" in page.split('id="training-stopped"', 1)[1].split(">", 1)[0]
+    assert "hidden" not in page.split('id="training-events-panel"', 1)[1].split(">", 1)[0]
+    assert "Last reported: Training" in page
+    assert "No held-out evaluation was recorded." in page
+    assert "No checkpoint was recorded." in page
+    assert "loss" in page and "0.5" in page
+
+
+def test_submitted_failure_without_metrics_does_not_claim_no_job(templates, common):
+    run = {"id": "failed", "state": "FAILED", "submitted_at": "2026-11-10T17:00:00Z",
+           "config": {"job_type": "dmasif_train"}, "training": {}}
+    page = templates.get_template("detail.html").render(**common, run=run, jobs=[{"job_id": "123"}], events=[])
+    assert 'id="training-stopped-title">No training metrics recorded</h2>' in page
+    assert 'id="training-stopped-context">This run has ended without recorded training progress.</p>' in page

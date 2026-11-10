@@ -16,7 +16,8 @@ data-state="{{ run.get('state', '') }}" data-observed="{{ run.get('last_observed
 
 {% macro run_row(run, labels) -%}
 <tr data-run-id="{{ run.get('id', '') }}" data-actor="{{ run.get('actor_login', '') }}" data-run-status="{{ run.get('state', '') }}" data-experiment="{{ run.get('experiment', '') }}">
-  <td><a class="experiment-link" href="/runs/{{ run.get('id', '') }}" title="Run {{ run.get('id', '') }}">{{ run.get('experiment') or 'Untitled experiment' }}</a>{% if run.get('source_kind') == 'slurm' and run.get('scheduler_job_id') %}<span class="cell-secondary">Job {{ run.get('scheduler_job_id') }}</span>{% endif %}</td>
+  {% set experiment_name = run.get('experiment') or 'Untitled experiment' %}
+  <td><a class="experiment-link" href="/runs/{{ run.get('id', '') }}" title="View metadata, metrics, and logs for {{ experiment_name }}" aria-label="{{ experiment_name }}: view metadata, metrics, and logs"><span class="experiment-name">{{ experiment_name }}</span><span class="row-arrow" aria-hidden="true">→</span></a>{% if run.get('source_kind') == 'slurm' and run.get('scheduler_job_id') %}<span class="cell-secondary">Job {{ run.get('scheduler_job_id') }}</span>{% endif %}</td>
   <td>{{ run.get('actor_login') or ('—' if run.get('source_kind') == 'slurm' else 'Unknown researcher') }}</td>
   <td>{{ commit_link(run) }}</td>
   {% set training = run.get('training') or {} %}

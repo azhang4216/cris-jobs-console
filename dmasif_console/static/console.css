@@ -44,6 +44,7 @@ pre code { padding: 0; background: none; font-size: inherit; }
 .main-shell { max-width: 1440px; margin: auto; padding: 48px 40px 0; }
 .page-heading { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 28px; }
 .page-description { margin-top: 7px; color: var(--muted); font-size: 14px; }
+.run-navigation-hint { margin-top: 7px; color: var(--text); font-size: 13px; }
 .heading-actions { display: flex; align-items: flex-end; flex-direction: column; gap: 8px; }
 .primary-button, .quiet-button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 38px; padding: 8px 14px; border: 1px solid var(--ink); border-radius: 6px; background: var(--ink); color: #fff; font-size: 13px; font-weight: 550; white-space: nowrap; }
 .primary-button:hover, .quiet-button:hover { background: #363c46; text-decoration: none; }
@@ -78,8 +79,11 @@ body > .demo-banner { max-width: 1440px; padding: 24px 40px 0; }
 .runs-table th:last-child, .runs-table td:last-child { padding-right: 18px; }
 .runs-table tbody tr:last-child td { border-bottom: 0; }
 .runs-table tbody tr:hover { background: #fafbfc; }
-.experiment-link { display: inline-flex; align-items: center; gap: 8px; max-width: 290px; color: var(--ink); font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
-.row-arrow { color: var(--muted); font-size: 12px; }
+.experiment-link { display: inline-flex; align-items: center; gap: 8px; min-height: 32px; max-width: 290px; padding: 4px 0; color: #245ba5; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.experiment-name { min-width: 0; text-decoration: underline; text-underline-offset: 3px; }
+.experiment-link:hover, .experiment-link:focus-visible { color: #174681; text-decoration: none; }
+.experiment-link:hover .experiment-name, .experiment-link:focus-visible .experiment-name { text-decoration-thickness: 2px; }
+.row-arrow { flex-shrink: 0; color: currentColor; font-size: 16px; }
 .cell-secondary { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .cell-secondary .mono { font-size: 11px; }
 .commit-link { display: inline-flex; align-items: center; gap: 5px; color: var(--text); font-size: 12px; white-space: nowrap; }

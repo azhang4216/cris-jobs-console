@@ -5,6 +5,7 @@
   <div>
     <div class="section-title"><h1>Runs</h1><span id="visible-count" class="count-badge">{{ runs|length }}</span></div>
     <p class="page-description">Follow training, evaluation, and checkpoints. Push code from your experiment branch to start a run.</p>
+    <p class="run-navigation-hint">Click a run name to view metadata, metrics, and logs.</p>
   </div>
   {% if (settings.get('instructions_url') or '').startswith('https://') %}
   <a class="primary-button" href="{{ settings.get('instructions_url') }}" target="_blank" rel="noopener noreferrer" title="Open job-submission instructions in the README">How to run an experiment <span aria-hidden="true">↗</span></a>

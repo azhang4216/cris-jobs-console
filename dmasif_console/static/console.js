@@ -435,8 +435,13 @@
     row.dataset.runStatus = run.state || "";
     row.dataset.experiment = run.experiment || "";
     const identity = node("td");
-    const link = runLink(run.id, "experiment-link", run.experiment || "Untitled experiment");
-    link.title = `Run ${run.id || ""}`;
+    const experimentName = run.experiment || "Untitled experiment";
+    const link = runLink(run.id, "experiment-link", "");
+    link.title = `View metadata, metrics, and logs for ${experimentName}`;
+    link.setAttribute("aria-label", `${experimentName}: view metadata, metrics, and logs`);
+    const arrow = node("span", "row-arrow", "→");
+    arrow.setAttribute("aria-hidden", "true");
+    link.append(node("span", "experiment-name", experimentName), arrow);
     identity.append(link);
     if (run.source_kind === "slurm" && run.scheduler_job_id) identity.append(node("span", "cell-secondary", `Job ${run.scheduler_job_id}`));
     const researcher = node("td", "", run.actor_login || (run.source_kind === "slurm" ? "—" : "Unknown researcher"));

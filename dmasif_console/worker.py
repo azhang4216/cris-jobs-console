@@ -85,6 +85,10 @@ class Worker:
             if run.get("capacity_reserved") and run["state"] in ACTIVE and run["state"] != "PREPARING":
                 self._monitor(run)
         for run in self.store.list_runs(limit=10000):
+            if (run.get("config", {}).get("job_type") == "dmasif_train"
+                    and not run.get("capacity_reserved") and run.get("result")
+                    and not run.get("telemetry_eof", False)):
+                self._training_telemetry(run)
             if not run.get("capacity_reserved") and any(item.get("cache_state") == "pending" for item in run.get("artifacts", [])):
                 if run.get("cache_attempts", 0) < 3:
                     self._cache_artifacts(run, run.get("result", {}).get("artifacts", []))
@@ -133,9 +137,17 @@ class Worker:
                                               "reason": "Unknown dataset_id. Select an operator-approved immutable dataset; ask the lab operator for its registered ID."}], original)
             if config["preset_id"] not in presets:
                 raise SourceError("Unknown preset_id; select an operator-approved resource preset.")
-            if config["preset_id"] != "quick-test":
-                raise SourceError("Only the tested quick-test preset is enabled in this release.")
+            training = config.get("job_type") == "dmasif_train"
+            if training != (datasets[config["dataset_id"]].get("kind") == "training"):
+                raise SourceError("The dataset_id does not match the selected job type.")
+            if training != (presets[config["preset_id"]].get("kind") == "training"):
+                raise SourceError("The resource preset does not match the selected job type.")
             resolved = {"dataset": datasets[config["dataset_id"]], "preset": presets[config["preset_id"]], "cluster": policy.get("cluster", {})}
+            if training:
+                from cluster_adapter.training import DATASET_FILES
+                resolved["cluster"] = {**resolved["cluster"],
+                                       "checkpoint_path": resolved["dataset"]["project_root"] + "/" + DATASET_FILES["head"],
+                                       "checkpoint_sha256": resolved["dataset"]["hashes"]["head"]}
             self._update(run, source=source, config=config, original_config=original, resolved=resolved,
                          state="WAITING_FOR_CAPACITY", capacity_reserved=False,
                          reason="Validated request; waiting for the application submission slot.")
@@ -210,9 +222,22 @@ class Worker:
         else:
             patch.update(state="QUEUED", reason=next((j.get("reason") for j in all_jobs if j.get("reason")), "Waiting in Slurm's queue."))
         run = self._update(run, **patch)
+        run = self._training_telemetry({**run, "jobs": all_jobs})
         if all_jobs and all(is_terminal(j) for j in all_jobs):
             self._finish(run, all_jobs)
         return run
+
+    def _training_telemetry(self, run: dict) -> dict:
+        if run.get("config", {}).get("job_type") != "dmasif_train":
+            return run
+        from .training import sync_training_telemetry
+        try:
+            return sync_training_telemetry(self.settings, self.store, self.adapter,
+                                           {**run, "jobs": self.store.jobs(run["id"])})
+        except Exception:
+            # Metrics failures must never rewrite authoritative scheduler state.
+            return self.store.update_run(run["id"], {"telemetry_error": "Training progress is temporarily unavailable; retained events and job status are unchanged.",
+                                                      "telemetry_eof": False})
 
     def _monitor(self, run: dict, *, reserve_unknown: bool = True):
         run = {**run, "jobs": self.store.jobs(run["id"])}
@@ -278,6 +303,12 @@ class Worker:
             artifacts = result.get("artifacts", [])
             if expected > 0 and valid == expected and len(artifacts) == valid and result.get("outcome") == "SUCCEEDED":
                 state, reason = "SUCCEEDED", "Every expected output passed validation."
+            elif (run.get("config", {}).get("job_type") == "dmasif_train"
+                  and result.get("outcome") == "PARTIAL"
+                  and result.get("training", {}).get("status") == "budget_exhausted"):
+                state, reason = "PARTIAL", "Training budget ended before the requested step target; checkpoints and held-out evaluation are retained."
+            elif run.get("config", {}).get("job_type") == "dmasif_train":
+                state, reason = "FAILED", "Training checkpoint or held-out evaluation validation failed."
             elif valid > 0 and valid < expected:
                 state, reason = "PARTIAL", "Only some expected outputs passed validation; this is not a successful run."
             else:

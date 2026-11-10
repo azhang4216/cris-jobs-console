@@ -1,0 +1,41 @@
+{% set training = run.get('training') or {} %}
+{% set config = run.get('config') or {} %}
+{% set is_training = config.get('job_type') == 'dmasif_train' or training.get('phase') or training.get('event_count') %}
+{% set evaluation = training.get('latest_evaluation') or {} %}
+<p class="small-note legacy-training-note" id="legacy-training-note" {% if is_training %}hidden{% endif %}>This older run has no training metrics. Its logs and saved outputs are below.</p>
+<section class="panel training-overview" id="training-overview" aria-labelledby="training-title" {% if not is_training %}hidden{% endif %}>
+  <div class="panel-heading"><h2 id="training-title">Training progress</h2><span class="training-phase" id="training-phase">{{ (training.get('phase') or 'Waiting to start')|replace('_', ' ')|capitalize }}</span></div>
+  <div class="training-summary">
+    <div><span>Training steps</span><strong class="mono" id="training-step">{% if training.get('step') is not none %}{{ training.get('step') }}{% if training.get('total_steps') %} / {{ training.get('total_steps') }}{% endif %}{% else %}—{% endif %}</strong></div>
+    <div><span>Batch size</span><strong class="mono" id="training-batch">{{ config.get('batch_size', '—') }}</strong></div>
+    <div><span>Last training update</span><strong id="training-updated">{{ timestamp(training.get('last_event_at')) }}</strong></div>
+  </div>
+  <div class="training-progress-track" id="training-progress-track" {% if not training.get('total_steps') or training.get('step') is none %}hidden{% endif %}><progress id="training-progress" max="{{ training.get('total_steps') or 1 }}" value="{{ training.get('step') or 0 }}" aria-label="Training steps completed"></progress></div>
+  <p class="training-note" id="training-complete-reason" {% if not training.get('complete_reason') %}hidden{% endif %}>{{ training.get('complete_reason') or '' }}</p>
+  <div class="metrics-heading"><h3>Latest training metrics</h3></div>
+  <dl class="metric-grid" id="latest-metrics">{% for key, value in (training.get('latest_metrics') or {}).items() %}<div><dt>{{ key }}</dt><dd class="mono">{{ value if value is not none else '—' }}</dd></div>{% endfor %}</dl>
+  <p class="training-note" id="latest-metrics-empty" {% if training.get('latest_metrics') %}hidden{% endif %}>Metrics will appear when the first training step is reported.</p>
+</section>
+<section class="panel" id="evaluation-panel" aria-labelledby="evaluation-title" {% if not is_training %}hidden{% endif %}>
+  <div class="panel-heading"><h2 id="evaluation-title">Held-out evaluation</h2><button type="button" class="text-button" id="view-evaluations">View evaluation history</button></div>
+  <p class="training-note" id="evaluation-context">{% if evaluation %}Step {{ evaluation.get('step', '—') }} · {{ timestamp(evaluation.get('timestamp')) }}{% else %}Evaluation runs automatically on held-out data, separately from training.{% endif %}</p>
+  <dl class="metric-grid" id="evaluation-metrics">{% for key, value in (evaluation.get('metrics') or {}).items() %}<div><dt>{{ key }}</dt><dd class="mono">{{ value if value is not none else '—' }}</dd></div>{% endfor %}</dl>
+</section>
+<section class="panel" id="checkpoints-panel" aria-labelledby="checkpoints-title" {% if not is_training %}hidden{% endif %}>
+  <div class="panel-heading"><h2 id="checkpoints-title">Checkpoints</h2><button type="button" class="text-button" id="view-checkpoints">View checkpoint history</button></div>
+  <ul class="checkpoint-list" id="training-checkpoints">{% for checkpoint in training.get('checkpoints') or [] %}<li><strong class="mono">{{ checkpoint.get('name') or 'Checkpoint' }}</strong><span>Step {{ checkpoint.get('step', '—') }}</span>{{ timestamp(checkpoint.get('timestamp')) }}</li>{% else %}<li class="muted">No checkpoint reported yet.</li>{% endfor %}</ul>
+</section>
+<section class="panel training-events-panel" id="training-events-panel" aria-labelledby="training-events-title" {% if not is_training %}hidden{% endif %}>
+  <div class="panel-heading"><div class="section-title"><h2 id="training-events-title" tabindex="-1">Steps, evaluations &amp; checkpoints</h2></div><a class="download-link" id="download-training-events" href="{{ settings.get('api_base_url', '') }}/api/runs/{{ run.get('id')|urlencode }}/training-events/download">Download all metrics ↓</a></div>
+  <form class="training-filters" id="training-filters" aria-label="Filter training events">
+    <label for="training-kind">Show<select id="training-kind" name="kind"><option value="">All events</option><option value="step">Training steps</option><option value="evaluation">Evaluations</option><option value="checkpoint">Checkpoints</option></select></label>
+    <label for="training-step-filter">Go to step<input id="training-step-filter" name="step" type="number" min="0" step="1" inputmode="numeric" placeholder="Any step"></label>
+    <button type="submit" class="quiet-button">Apply</button><button type="reset" class="text-button">Clear filters</button>
+  </form>
+  <div class="training-events-message" id="training-events-message" role="status" aria-live="polite">Waiting for training events…</div>
+  <div class="table-scroll training-events-scroll" id="training-events-table" tabindex="0" role="region" aria-label="Training events and every reported metric" hidden>
+    <table class="training-events-table"><thead><tr><th scope="col">Step</th><th scope="col">Event</th><th scope="col">Recorded</th><th scope="col">Metrics &amp; details</th></tr></thead><tbody id="training-events-body"></tbody></table>
+  </div>
+  <div class="table-footer training-events-footer"><span id="training-events-count">Newest events first · 50 per page</span><nav aria-label="Training event pages"><button type="button" class="quiet-button" id="training-newest">Latest</button><button type="button" class="quiet-button" id="training-newer" disabled>Newer</button><button type="button" class="quiet-button" id="training-older" disabled>Older</button><button type="button" class="quiet-button" id="training-retry" hidden>Retry</button></nav></div>
+  <noscript><p class="training-note">Enable JavaScript to browse individual steps, or download all metrics above.</p></noscript>
+</section>

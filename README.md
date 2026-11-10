@@ -1,19 +1,25 @@
-# cris-jobs-console — dashboard and infrastructure
+# cris-jobs-console — training dashboard and infrastructure
 
-> [!IMPORTANT]
-> **Do not push experiment code, experiment configurations, or `runs/*` branches to this repository.**
->
-> **To run an experiment, follow the [dmasif-experiments README](https://github.com/azhang4216/dmasif-experiments#readme).** Make your experiment changes and submit your runs in that repository.
+**Researchers work only in [dmasif-experiments](https://github.com/azhang4216/dmasif-experiments#readme).** Create a `runs/<experiment>` branch from its `main`, edit research code or run settings, commit, and push. This repository runs the web console and submits the resulting training job; it is maintained by the operator.
 
-This repository maintains the dashboard and the service that submits jobs to the cluster. The documentation below is for developing and operating that service. The public, read-only dashboard shows each run's researcher, exact code and configuration, progress, logs, and validated results.
+The console trains the exact submitted commit on the existing **dataset_v2**, runs periodic held-out evaluation and a final evaluation of the best checkpoint, and displays status, step metrics, evaluations, checkpoints, and recent logs. Batch size is configurable in the research repository. Researchers do not select datasets, rebuild caches, edit Slurm files, or change console infrastructure.
 
-The first release supports the existing dMaSIF **feature-extraction** interface. Full training and checkpoint resumption need a later adapter. The local demonstration uses synthetic inputs/features and never executes research code, SSH, or GPU jobs.
+**Release status:** the training integration is implemented locally. The November 10, 2026 VM inspection was read-only; this update has not been deployed or tested with a real GPU training submission. See [training deployment](docs/training-deployment.md) for the remaining operator activation and acceptance steps. Earlier extraction acceptance results are historical evidence, not training acceptance.
 
-**Current free pilot:** the local app receives signed pushes from the private research repository and submits isolated Slurm jobs. A temporary HTTPS tunnel connects GitHub and shares the read-only dashboard. See [the live submission guide](docs/live-submissions.md). The separate [cluster history guide](docs/live-test.md) covers observation without submissions. GitHub Pages cannot run the backend; an always-on host is still needed for permanent deployment.
+## Research workflow
+
+The [researcher guide](docs/researcher.md) explains the complete flow:
+
+1. Branch from `dmasif-experiments/main` into `runs/my-experiment`.
+2. Edit `src/surface_encoder.py`, other research code, or `experiments/run.yaml`.
+3. Push the commit; the signed GitHub webhook creates a run when submissions are enabled.
+4. Open that run in the console to follow training and held-out evaluation.
+
+Defaults reproduce the observed v8 preset: batch **32**, **10,000** training steps, evaluation and checkpoint saves every **125** steps. Training data is fixed; evaluation uses the separate `valset_v1v2` holdout. New runs always get separate output directories and do not auto-resume old checkpoints. The earlier trigger-test branches can stay untouched.
 
 ## Run the local demo
 
-Requires Python 3.12+ and Git. From this directory:
+Requires Python 3.12+ and Git:
 
 ```bash
 python3 -m venv .venv
@@ -23,60 +29,47 @@ python -m pip install --no-deps -e .
 dmasif-console demo --serve
 ```
 
-Open **http://127.0.0.1:8000**; no login is required. Two signed sample pushes move through the queue and produce separate downloadable NPZ files. The page clearly labels the data as simulated. Stop with Ctrl+C.
+Open **http://127.0.0.1:8000**. Two simulated training runs exercise the signed-push lifecycle, step/evaluation/checkpoint history, and result downloads. The demo does not use SSH, run scientific code, or allocate a GPU. Its checkpoints and metrics are synthetic and clearly labeled.
 
-Demo state and the generated webhook secret live in ignored `.state-demo/`. The command refuses to overwrite an existing demo; use a new `--state-dir .state-demo-2`, or restart the existing one:
+Demo state and its generated signing secret live in ignored `.state-demo/`. To preserve an existing demo, use a new `--state-dir` or restart it:
 
 ```bash
 export DMASIF_WEBHOOK_SECRET_FILE="$PWD/.state-demo/webhook-secret"
 dmasif-console --config .state-demo/config.yaml serve --host 127.0.0.1 --port 8000
 ```
 
-The demo needs the development dependencies because it exercises the real ASGI receiver using a local test client. Deployed web/worker services need only `requirements.lock`.
+The demo needs the development dependencies. A deployed service uses `requirements.lock`.
 
-## What is implemented
+## What the service provides
 
 | Component | Behavior |
 | --- | --- |
-| Signed webhook receiver | Raw-body HMAC, repository/actor/branch policy, durable acknowledgement, replay protection |
-| Dashboard | History/details, filters, local timestamps, live logs, source links, validated downloads |
-| SQLite store | Four tables, persistent state, atomic single-slot reservation, scheduler evidence and events |
-| Source preparation | Exact SHA archive, saved configuration/policy, input manifest; rejects LFS/submodules/unsafe paths |
-| Worker | Singleton lock, FIFO application queue, monitoring, bounded caching, restart recovery |
-| SSH/Slurm adapter | Fixed remote protocol, strict host verification, claims/receipts, reconciliation, cancellation |
-| Result validator | NPZ schema/shapes/finite values, checksums, atomic publication of validated bytes |
-| Operator CLI | Pause/resume, reconcile/cancel, evidence-based resolution, consistent backup, restore with duplicate-delivery recovery |
-| Single-service hosting | Supervised web + worker, persistent SQLite/files, health checks, rotating local backups |
-| Local simulator | Persistent fake scheduler exercising the same run lifecycle without SSH or scientific execution |
-| Live observer | Read-only SSH monitoring of existing Slurm jobs, cached locally, with unknown Git provenance kept explicit |
+| Signed push receiver | Repository, actor, and `runs/*` policy; durable acknowledgement and replay protection |
+| Source preparation | Saves the exact commit and accepted settings; rejects unsafe archives, LFS, and submodules |
+| Training adapter | One generated Slurm job invoking the submitted `src/run_experiment.py`; fixed prepared data and isolated outputs |
+| Training dashboard | Latest step and all reported metrics; held-out evaluation and checkpoint history; exact-step filters and older-event paging |
+| Durable telemetry | SQLite schema 2 stores event history independently of the bounded raw-log tail; full JSONL export |
+| Validation | Checks required checkpoints, step/configuration evidence, held-out evaluation, and output checksums before success |
+| Worker | One active application run, FIFO queue, restart recovery, and bounded monitoring/cache work |
+| Operator controls | Pause/resume, cancellation, uncertain-submission reconciliation, backup, and restore |
 
-Every run writes beneath a new `runs/<run_uuid>/jobs/<slurm_job_id>/` directory. The generated template never uses the existing shared test-output directory. A persistent execution claim prevents the same run from executing twice; intentional repeats always get new run IDs.
+Every run writes beneath `runs/<run_uuid>/jobs/<slurm_job_id>/training/` in the managed cluster root. Required outputs are `best.pt`, `last.pt`, `history.json`, `training-summary.json`, and `evaluation.json`. Retained `step<N>.pt` checkpoints and `evaluation-rows.tsv` are also validated and offered as downloads when present. Telemetry remains in the run directory and is available through the console's full metrics export. Large uncached outputs stay retained on the cluster.
 
-Scheduler exit zero is insufficient for success: every expected output must validate. Lost submission responses keep capacity reserved and trigger reconciliation, never an automatic second `sbatch`.
+Scheduler exit zero alone does not mean success. A run that stops at its training time budget retains checkpoints and final evaluation but is **Partial** if it did not reach the requested step target. Lost submission responses reserve capacity for reconciliation instead of automatically submitting another job.
 
-The operator's `presets.quick-test.gpus` setting defaults to one and accepts only the integers one or two. Reserving two requires an explicit supported H100/H200 type; researchers cannot change it in their run YAML. The October 2 acceptance test reserved two H100 GPUs while extraction used only the first GPU assigned by Slurm. Requested, allocated, and used counts are recorded separately; allocating two does not enable multi-GPU extraction. See the [adapter contract](docs/cluster-adapter.md#match-the-runtime-to-the-gpu).
+## Operator setup
 
-## Optional deployment on Render
+Use [config/training.example.yaml](config/training.example.yaml) and [docs/training-deployment.md](docs/training-deployment.md). The example intentionally has invalid identity/hash placeholders and `submissions_enabled: false`.
 
-Use **one paid Render web service with one persistent disk**. The service runs the website and job monitor together; SQLite stores history on the disk. Training/extraction stays on the lab's GPUs. There is no separate database, worker service, or GitHub Pages site.
+The training preset uses one GPU, eight CPUs, 96 GB RAM, and a 12-hour Slurm limit. The operator pins the runtime, adapter, fixed dataset files, initialization checkpoint, and approved GitHub actors. Researchers cannot override cluster paths, scheduler resources, runtime images, or dataset identity in their run YAML.
 
-Start with [the Render setup guide](docs/render.md). [render.yaml](render.yaml) starts with one 0.5-CPU/512-MB service and a 10-GB disk, about $9.50/month at October 2026 prices before taxes and usage extras. Review Render's displayed cost and check peak memory during the pilot. Daily application backups retain three copies on that disk; an operator must also export backups elsewhere. Automatic infrastructure deployments are disabled, so experiment pushes do not restart the application.
+The application needs one always-on Python service, persistent SQLite/file storage, and a stable HTTPS webhook URL. Existing [Render hosting](docs/render.md) and [Docker Compose](docs/deployment.md) instructions describe the hosting options; use the training configuration and acceptance procedure when activating this release. Hosting the dashboard does not run training on the web server.
 
-The submission service starts with real submissions disabled in operator configuration. Complete the approved repository/actor IDs, immutable input/image/checkpoint hashes, and private site settings from [config/example.yaml](config/example.yaml). Placeholder hashes deliberately fail validation. The Blueprint prompts for private values; supply them in Render, never in Git. A Render deployment has not yet been verified; the current live preview uses the laptop and a temporary tunnel.
+## Credentials and visibility
 
-The existing [Docker Compose guide](docs/deployment.md) remains an alternative for a lab-managed Linux server.
+Private operator configuration, SSH keys, known-hosts files, repository tokens, and webhook secrets stay outside Git. Pass them through protected files or the deployment's secret manager. Docker contexts exclude local private state. Public responses redact configured cluster identities, paths, and secret values.
 
-## Credential handling
-
-- Real SSH keys, login notes, `.env` files, deployment secrets, and application state are ignored by Git. Private original notes remain in ignored `.local/` on this workstation.
-- Publishable code/docs use example cluster identities. Site-specific login details belong only in ignored operator configuration, mounted as a runtime secret.
-- The current pilot loads the SSH key, verified `known_hosts`, operator configuration, repository token, and webhook secret from protected local files. A hosted deployment uses private files or its secret manager, never committed secret values.
-- Dashboard pages, run APIs, logs, and result downloads are public and require no login. A private GitHub repository protects its source; it does not make the dashboard private. Only signed pushes from approved GitHub IDs can create runs; visitors cannot submit or cancel jobs.
-- The single application is one backend trust boundary: its administrator and backend processes can access its credentials. Browser clients cannot. The optional Compose setup provides separate web/worker secret mounts.
-- Docker build contexts use an allowlist. Browser responses omit private policies/paths and redact current and historical cluster login identities from logs and errors.
-- An optional private-repository token belongs in a backend secret file. GitHub Actions secrets are not automatically runtime secrets; never put cluster credentials into a Pages bundle or experiment workflow.
-
-Keep application-host administration limited to operators who may access the cluster credential. Sharing one cluster Unix identity provides attribution and protection from accidental overwrites, not isolation from trusted code already running under that identity.
+The dashboard, logs, and available downloads are public and read-only. Only signed pushes from approved numeric GitHub IDs can submit work; visitors cannot submit or cancel jobs. Keep credentials and private notes out of research code and logs. A shared cluster Unix account provides attribution and protection from accidental overwrites, not isolation from hostile code under that account.
 
 ## Verify
 
@@ -86,8 +79,10 @@ ruff check dmasif_console cluster_adapter tests
 node --check dmasif_console/static/console.js
 ```
 
-Tests cover signed/replayed webhooks, identity spoofing, concurrent acceptance, secret redaction, source pinning, output collisions, corrupt/incomplete results, lost submission receipts, duplicate execution claims, cache recovery, and restore reconciliation. They use local temporary data and fake scheduler commands.
+The optional DOM checks run with an existing jsdom installation:
 
-The live pilot has a frozen container, a versioned cluster adapter, and a signed webhook on the private research repository. Real pushes verified invalid-config rejection, submission, running-state observation, duplicate delivery, and restart recovery. The first two extraction attempts failed on incompatible Blackwell GPUs because the cluster redirects single-GPU H100 requests to that pool. The explicitly authorized October 2 test reserved two H100 GPUs, used one for extraction, and completed job `114515` in **101 seconds**, producing a validated `1STP.npz`. Further submissions remain paused and the operator default is restored to one; the two-GPU permission covered that test only. **H100/H200 with the existing runtime remains the target; Blackwell support is deferred in [TODO.md](TODO.md).** Permanent hosting and routine one-GPU allocation still need resolution. See the [acceptance record](docs/acceptance-2026-10-01.md) for verification evidence and [verification procedure](docs/live-submissions.md#acceptance-checks).
+```bash
+JSDOM_MODULE=/path/to/node_modules/jsdom node tests/check_training_ui.cjs
+```
 
-The design and review decisions are in [ARCHITECTURE.md](ARCHITECTURE.md).
+These tests use local fixtures and fake scheduler commands. A successful local test suite is not a real training acceptance run. The [current architecture](ARCHITECTURE.md) separates the training design from the retained [October extraction acceptance record](docs/acceptance-2026-10-01.md).

@@ -31,12 +31,19 @@
 
   <div class="detail-grid">
     <div class="detail-primary">
+      {% include 'training.html' %}
+      <section class="panel logs-panel" aria-labelledby="logs-title">
+        <div class="panel-heading"><h2 id="logs-title">Recent logs</h2><label class="follow-toggle"><input type="checkbox" id="follow-logs" checked> Follow output</label></div>
+        <div class="log-toolbar"><span>stdout + stderr · recent output only</span><span id="log-observed">Updated {{ timestamp(run.get('last_observed_at')) }}</span></div>
+        <pre class="log-output" id="log-output" tabindex="0" aria-label="Recent job log output">{{ run.get('log_tail') or ('No logs: no cluster job was submitted.' if no_job_submitted else ('Logs unavailable for this imported job.' if run.get('source_kind') == 'slurm' else 'Waiting for job output…')) }}</pre>
+      </section>
+
       <section class="panel" aria-labelledby="results-title">
-        <div class="panel-heading"><div class="section-title"><h2 id="results-title">Results</h2><span class="count-badge" id="artifact-count">{{ run.get('artifacts', [])|length }}</span></div></div>
+        <div class="panel-heading"><div class="section-title"><h2 id="results-title">Saved outputs</h2><span class="count-badge" id="artifact-count">{{ run.get('artifacts', [])|length }}</span></div></div>
         <div id="artifacts-list" class="artifacts-list">
           {% for artifact in run.get('artifacts', []) %}
           <div class="artifact-row">
-            <div class="file-icon" aria-hidden="true">NPZ</div>
+            <div class="file-icon" aria-hidden="true">{{ ((artifact.get('name') or 'file').rsplit('.', 1)[-1])[:6]|upper }}</div>
             <div class="artifact-info">
               <strong>{{ artifact.get('name') or 'Result file' }}</strong>
               <span class="cell-secondary"><span data-bytes="{{ artifact.get('size', 0) }}">{{ artifact.get('size', 0) }} bytes</span>{% if artifact.get('sha256') %} · <span class="mono" title="SHA-256: {{ artifact.get('sha256') }}">{{ artifact.get('sha256')[:12] }}</span>{% endif %}</span>
@@ -48,12 +55,6 @@
           {% else %}<div class="results-empty"><p>{{ 'No results: no cluster job was submitted.' if no_job_submitted else ('Results have not been imported.' if run.get('source_kind') == 'slurm' else 'No results yet.') }}</p></div>{% endfor %}
         </div>
         <details class="detail-disclosure"><summary>Validation</summary><pre class="json-block" id="validation-json">{{ run.get('validation', {})|tojson(indent=2) }}</pre></details>
-      </section>
-
-      <section class="panel logs-panel" aria-labelledby="logs-title">
-        <div class="panel-heading"><h2 id="logs-title">Logs</h2><label class="follow-toggle"><input type="checkbox" id="follow-logs" checked> Follow output</label></div>
-        <div class="log-toolbar"><span>stdout + stderr</span><span id="log-observed">Updated {{ timestamp(run.get('last_observed_at')) }}</span></div>
-        <pre class="log-output" id="log-output" tabindex="0" aria-label="Recent job log output">{{ run.get('log_tail') or ('No logs: no cluster job was submitted.' if no_job_submitted else ('Logs unavailable for this imported job.' if run.get('source_kind') == 'slurm' else 'Waiting for job output…')) }}</pre>
       </section>
 
       <details class="panel technical-details">
@@ -74,7 +75,8 @@
           <div><dt>Commit</dt><dd>{{ commit_link(run) }}</dd></div>
           <div><dt>Branch</dt><dd class="mono break-anywhere">{{ run.get('branch') or '—' }}</dd></div>
           {% if run.get('source_kind') == 'slurm' %}<div><dt>Slurm job</dt><dd class="mono">{{ run.get('scheduler_job_id') or '—' }}</dd></div>{% endif %}
-          <div><dt>Dataset</dt><dd id="detail-dataset">{{ run.get('dataset_id') or '—' }}</dd></div>
+          <div><dt>Training data</dt><dd id="detail-dataset">{{ run.get('dataset_id') or '—' }}</dd></div>
+          <div id="detail-batch-row" {% if not (run.get('config') or {}).get('batch_size') %}hidden{% endif %}><dt>Batch size</dt><dd class="mono" id="detail-batch">{{ (run.get('config') or {}).get('batch_size', '—') }}</dd></div>
           <div><dt>Last cluster check</dt><dd id="last-observed">{{ timestamp(run.get('last_observed_at')) }}</dd></div>
         </dl>
         {% if (settings.get('instructions_url') or '').startswith('https://') %}<p class="panel-footnote"><a href="{{ settings.get('instructions_url') }}" target="_blank" rel="noopener noreferrer">Run instructions ↗</a></p>{% endif %}

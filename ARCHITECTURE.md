@@ -1,5 +1,38 @@
 # dMaSIF job submission architecture
 
+## Current training design — November 10, 2026
+
+Researchers edit only `dmasif-experiments`: create a `runs/*` branch from current `main`, change code such as `src/surface_encoder.py` or bounded settings in `experiments/run.yaml`, commit, and push. The console accepts the signed push, pins its exact source, and submits one training-and-evaluation job. The old trigger-test branches remain historical. See [researcher workflow](docs/researcher.md) and [operator activation](docs/training-deployment.md).
+
+```mermaid
+flowchart LR
+    A[Research runs/* push] --> B[Signed webhook and exact source snapshot]
+    B --> C[One generated Slurm job]
+    C --> D[Train on fixed dataset_v2]
+    D --> E[Evaluate best checkpoint on fixed holdout]
+    D --> F[Durable step and checkpoint events]
+    E --> F
+    E --> G[Validate retained outputs]
+    F --> H[Read-only job console]
+    G --> H
+```
+
+The scientific baseline is the observed VM checkout of `cszcz00/dMaSIF`, `claude/model-training`, commit `2665d9d01c285c2cdffdff0e4414860bd714e83e`. `src/slurm/train_v8.sbatch` is its current preset; `train_b8.sbatch` was not present. Nick's local repository contains experiment snapshots and optional pooling patches, not a replacement for this complete baseline. The submitted `src/run_experiment.py` wraps the submitted trainer, preserving v8 defaults and adding automatic final held-out evaluation and structured progress.
+
+The operator registers existing `dataset_v2` identity files and prepared `items.tsv`/`ligand_feats.npz`, plus the separate `valset_v1v2` holdout of 400 rows across 240 target groups. Those groups are excluded from training. The data root is mounted read-only at `/dataset`; only a per-run item-list copy is normalized from its original absolute path prefix. Surface/PLIP caches are reused and missing or incompatible cache data fails instead of being regenerated. Research code is pinned at `/source`; writable outputs and compilation caches belong to the isolated run.
+
+The default policy allocates one GPU, eight CPUs, 96 GB RAM, and 12 hours, with no inherited extraction test QoS. Researchers choose batch size (default 32), steps (10,000), evaluation/save intervals (125), seed, and repeat label. The trainer disables auto-resume; each push gets a fresh `runs/<uuid>/jobs/<slurm-id>/training/` directory. Training and final evaluation run inside the same Slurm allocation.
+
+Required outputs are `best.pt`, `last.pt`, `history.json`, `training-summary.json`, and `evaluation.json`. Success requires the requested step target and mutually consistent checkpoint/evaluation/configuration evidence, not just scheduler exit zero. `budget_exhausted` retains validated artifacts and evaluation but is `PARTIAL`. Existing signed-delivery, submission-claim, exact-source, reconciliation, and backup guarantees remain in place.
+
+SQLite schema 2 adds `training_events`. The worker atomically commits each telemetry chunk's events, byte offset, and current summary; replay does not duplicate records. Event schema 1 is independent of database schema. Structured per-step/evaluation/checkpoint history supports type filters, exact-step lookup, older pages, and complete JSONL export. It is retained independently of the bounded stdout/stderr tail. Browser requests read cached state; the dataset explorer and discovery APIs are removed.
+
+**Deployment status:** this update's VM activity was read-only. The newer observed sandbox uses PyTorch 2.8.0a0 / NVIDIA 25.06 / CUDA 12.9 and has historical Blackwell training evidence; the older extraction image's limitations do not establish the training runtime's behavior. The inspected SIF was hashed, but the new wrapper/adapter has not had a real GPU training acceptance run. A pinned operator deployment and approved short GPU acceptance are required before routine submissions. See [training deployment](docs/training-deployment.md) for the exact remaining work.
+
+## Historical extraction design — R11, October 2, 2026
+
+Everything below records the earlier extraction-only pilot and its original decisions and acceptance evidence. References below to “current,” the first release, extraction presets, and Blackwell deferral belong to that historical scope; they do not describe the training release above.
+
 Revision: R11, October 2, 2026. The free pilot receives signed GitHub pushes, submits isolated Slurm jobs, and serves a public dashboard from the laptop through a temporary HTTPS tunnel. R11 adds an explicitly authorized two-GPU H100 acceptance test while the extractor uses one device, with separate requested, allocated, and used counts. GPU selection must be verified against the actual allocation. Render remains optional. The R3 specialist review remains recorded below with its original scope.
 Scope: managed feature extraction from the private research repository. A frozen runtime and versioned adapter are installed in a new managed cluster root. The genuine invalid-config push, submission, running-state observation, replay protection, and restart recovery passed. The first two extractions failed on Blackwell, including the H100 request that the scheduler rewrote; their confirmed failed states and durations of 179 and 194 seconds remain visible. The authorized October 2 H100 test completed in 101 seconds and produced a validated `1STP.npz` with 901 atoms, 3,928 points, and 16-dimensional features. See the [acceptance record](docs/acceptance-2026-10-01.md) for local/public verification evidence. Credentials and actual private paths stay outside Git.
 

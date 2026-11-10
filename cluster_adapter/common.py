@@ -99,7 +99,8 @@ def contained(base: Path, value: str, *, must_exist: bool = True) -> Path:
     return path
 
 
-def safe_extract(archive: Path, destination: Path, limit_bytes: int = 50 * 1024 * 1024) -> dict:
+def safe_extract(archive: Path, destination: Path, limit_bytes: int = 50 * 1024 * 1024,
+                 *, required_files=("affinity/extract.py",)) -> dict:
     """Extract plain Git content; reject links, devices, duplicates and oversized data."""
     destination.mkdir(parents=True, exist_ok=False)
     total = 0
@@ -136,8 +137,9 @@ def safe_extract(archive: Path, destination: Path, limit_bytes: int = 50 * 1024 
             if target.stat().st_size != member.size:
                 raise AdapterError("Truncated source archive")
             files[name] = sha256_file(target)
-    if "affinity/extract.py" not in files:
-        raise AdapterError("Source lacks affinity/extract.py")
+    for required in required_files:
+        if required not in files:
+            raise AdapterError("Source lacks " + required)
     return files
 
 

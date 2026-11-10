@@ -15,6 +15,7 @@ from typing import Protocol
 from cluster_adapter.common import AdapterError, canonical, claim, contained, input_manifest, job_id, read_json, run_id, safe_extract, sha256_file, utcnow, write_json
 from cluster_adapter.helper import Helper
 from cluster_adapter.validate import publish
+from cluster_adapter.training import TRAINING_SOURCE_FILES, dataset_manifest, is_training, publish_training, telemetry_chunk
 from .runtime_secrets import private_key_copy
 
 
@@ -40,6 +41,7 @@ class ClusterAdapter(Protocol):
     def fetch_artifact(self, run: dict, artifact: dict, destination: Path) -> None: ...
     def cancel(self, run: dict, jobs: list[dict] | None = None) -> None: ...
     def inventory(self) -> list[dict]: ...
+    def telemetry(self, run: dict, offset: int = 0, max_bytes: int = 262144) -> dict: ...
 
 
 def _get(value, name, default=None):
@@ -62,6 +64,8 @@ def _prepared_run(run: dict) -> dict:
     for name in ("gpus", "qos", "cpus", "memory_gb", "wall_minutes"):
         if name in resolved.get("preset", {}):
             cluster[name] = resolved["preset"][name]
+    if is_training(result):
+        cluster["preset_kind"] = "training"
     return result
 
 
@@ -91,7 +95,7 @@ class SSHAdapter:
         # may use a newer operator-installed helper for that same cluster/root,
         # so accounting fixes can reconcile old jobs without rewriting their
         # immutable source, runtime, adapter identity, or submission request.
-        read_operations = {"reconcile", "status", "logs", "result", "artifact"}
+        read_operations = {"reconcile", "status", "logs", "result", "artifact", "telemetry"}
         if operation in read_operations and all(
             cluster.get(name) == _get(self.cluster, name) for name in ("host", "user", "root")
         ):
@@ -99,7 +103,7 @@ class SSHAdapter:
         for value in (helper, root):
             if not re.fullmatch(r"/[A-Za-z0-9_./-]+", value) or ".." in Path(value).parts:
                 raise TransportError("Invalid managed cluster path")
-        if operation not in {"stage", "submit", "reconcile", "status", "logs", "result", "artifact", "cancel", "inventory"}:
+        if operation not in {"stage", "submit", "reconcile", "status", "logs", "result", "artifact", "telemetry", "cancel", "inventory"}:
             raise TransportError("Unsupported helper operation")
         command = shlex.join(["python3", helper, "--root", root, operation])
         # -F /dev/null prevents a local user SSH config from changing the security
@@ -139,7 +143,10 @@ class SSHAdapter:
             raise PreparationError("Source archive failed size or integrity checks")
         prepared = _prepared_run(run)
         try:
-            input_manifest(prepared["resolved"]["dataset"]["entries"])
+            if is_training(prepared):
+                dataset_manifest(prepared["resolved"]["dataset"])
+            else:
+                input_manifest(prepared["resolved"]["dataset"]["entries"])
         except (AdapterError, KeyError) as exc:
             raise PreparationError(str(exc)) from exc
         payload = {"run": prepared, "source": {key: source[key] for key in ("sha256", "commit_sha")}, "archive_b64": base64.b64encode(archive.read_bytes()).decode(), "limits": {name: getattr(self.settings, name) for name in ("max_source_bytes", "max_input_bytes", "min_free_bytes")}}
@@ -165,6 +172,11 @@ class SSHAdapter:
     def results(self, run: dict, jobs=None):
         jobs = self._jobs(run, jobs) or self.reconcile(run)
         return self._call("result", {"run_id": run_id(run["id"]), "jobs": jobs}, run=run)
+
+    def telemetry(self, run: dict, offset: int = 0, max_bytes: int = 262144) -> dict:
+        jobs = run.get("jobs", []) or self.reconcile(run)
+        return self._call("telemetry", {"run_id": run_id(run["id"]), "jobs": jobs,
+                                      "offset": offset, "max_bytes": max_bytes}, run=run)
 
     def fetch_artifact(self, run: dict, artifact: dict, destination: Path) -> None:
         response = self._call("artifact", {"run_id": run_id(run["id"]), "artifact": artifact, "limit": self.settings.max_artifact_bytes}, run=run)
@@ -204,9 +216,15 @@ class FakeAdapter:
     def directory(self, run: dict) -> Path:
         return self.root / "runs" / run_id(run["id"])
 
+    def telemetry(self, run: dict, offset: int = 0, max_bytes: int = 262144) -> dict:
+        jobs = run.get("jobs", []) or self.reconcile(run)
+        return telemetry_chunk(self.directory(run), jobs, offset, max_bytes)
+
     def stage(self, run: dict, source: dict) -> dict:
         prepared = _prepared_run(run)
         directory = self.directory(run)
+        if is_training(prepared):
+            return self._stage_training(prepared, source, directory)
         try:
             entries = input_manifest(prepared["resolved"]["dataset"]["entries"])
             archive = Path(source["archive_path"])
@@ -257,6 +275,33 @@ class FakeAdapter:
         except (AdapterError, OSError, KeyError, ValueError) as exc:
             raise PreparationError(str(exc)) from exc
 
+    def _stage_training(self, prepared: dict, source: dict, directory: Path) -> dict:
+        archive = Path(source["archive_path"])
+        if archive.is_symlink() or archive.stat().st_size > self.settings.max_source_bytes or sha256_file(archive) != source["sha256"]:
+            raise PreparationError("Source archive failed integrity checks")
+        identity = {"run": prepared, "source": {key: source[key] for key in ("sha256", "commit_sha")}, "inputs": []}
+        identity_hash = hashlib.sha256(canonical(identity)).hexdigest()
+        directory.parent.mkdir(parents=True, exist_ok=True)
+        if directory.exists():
+            if read_json(directory / "request.json")["identity_sha256"] != identity_hash:
+                raise PreparationError("Existing training simulation identity differs")
+            if (directory / "stage.json").exists():
+                return read_json(directory / "stage.json")
+        else:
+            directory.mkdir()
+            write_json(directory / "request.json", {**identity, "identity_sha256": identity_hash}, exclusive=True)
+        target = directory / "source"
+        if not target.exists():
+            safe_extract(archive, target, self.settings.max_source_bytes, required_files=TRAINING_SOURCE_FILES)
+        for name in ("logs", "jobs", "inputs"):
+            (directory / name).mkdir(exist_ok=True)
+        write_json(directory / "inputs.json", [])
+        stage = {"remote_dir": str(directory), "provenance": {
+            "simulation": True, "source_sha256": source["sha256"], "commit_sha": source["commit_sha"],
+            "dataset_id": "dataset_v2", "runtime": "local synthetic training fixture; no research code or GPU executed"}}
+        write_json(directory / "stage.json", stage, exclusive=True)
+        return stage
+
     def submit(self, run: dict) -> list[dict]:
         directory = self.directory(run)
         receipt = directory / "submission-receipt.json"
@@ -299,7 +344,13 @@ class FakeAdapter:
             write_json(directory / "execution.claim" / "owner.json", {"job_id": job["job_id"]}, exclusive=True)
             job.update(state="RUNNING", started_at=utcnow())
             with (directory / "logs" / f"slurm-{job['job_id']}.out").open("a") as stream:
-                stream.write("Generating small synthetic features for protocol validation.\n")
+                stream.write("LOCAL SIMULATION: training progress and held-out evaluation; no GPU work.\n" if is_training(run) else "Generating small synthetic features for protocol validation.\n")
+            if is_training(run):
+                output = directory / "jobs" / job["job_id"] / "training"
+                output.mkdir(parents=True, exist_ok=True)
+                write_json(output / "simulation-start.json", {"started_at": utcnow()}, exclusive=True)
+                (output / "telemetry.jsonl").write_text(json.dumps({"schema_version": 1, "seq": 1, "kind": "phase", "phase": "training",
+                    "timestamp": utcnow(), "step": 0, "total_steps": run["config"]["steps"], "metrics": {}}) + "\n")
         elif job["polls"] >= 2:
             self._produce(run, job)
             job.update(state="COMPLETED", exit_code="0:0", terminal=True, ended_at=utcnow())
@@ -307,6 +358,8 @@ class FakeAdapter:
         return [job]
 
     def _produce(self, run, job):
+        if is_training(run):
+            return self._produce_training(run, job)
         import numpy as np
 
         directory = self.directory(run)
@@ -329,6 +382,51 @@ class FakeAdapter:
         publish(raw, job_dir / "published", [entry["expected_output"] for entry in entries], provenance, job_dir / "result-manifest.json")
         with (directory / "logs" / f"slurm-{job['job_id']}.out").open("a") as stream:
             stream.write("Simulation complete. All synthetic NPZ files passed the deployed validator.\n")
+
+    def _produce_training(self, run, job):
+        directory = self.directory(run)
+        job_dir = directory / "jobs" / job_id(job["job_id"])
+        if (job_dir / "result-manifest.json").exists():
+            return
+        raw = job_dir / "training"
+        raw.mkdir(parents=True, exist_ok=True)
+        steps = run["config"]["steps"]
+        history = []
+        telemetry = raw / "telemetry.jsonl"
+        seq = sum(1 for line in telemetry.read_text().splitlines() if line) if telemetry.exists() else 0
+        with telemetry.open("a") as stream:
+            def emit(kind, step, metrics=None, **extra):
+                nonlocal seq
+                seq += 1
+                stream.write(json.dumps({"schema_version": 1, "seq": seq, "kind": kind, "timestamp": utcnow(),
+                                         "step": step, "total_steps": steps, "metrics": metrics or {}, **extra}) + "\n")
+            for index, step in enumerate(sorted({0, steps // 4, steps // 2, steps})):
+                metrics = {"loss": round(2.4 / (index + 1), 4), "mrr": round(0.08 + index * 0.07, 4),
+                           "top1": round(0.03 + index * 0.04, 4), "top10": round(0.2 + index * 0.1, 4),
+                           "auroc": round(0.78 + index * 0.03, 4), "ap": round(0.3 + index * 0.05, 4)}
+                history.append({"step": step, **metrics})
+                emit("step", step, {"loss": metrics["loss"]}, phase="training")
+                emit("evaluation", step, metrics, phase="validation")
+            for name in ("best.pt", "last.pt"):
+                write_json(raw / name, {"simulation": True, "step": steps, "notice": "Synthetic fixture; not a loadable model"})
+                emit("checkpoint", steps, name=name)
+            emit("phase", steps, phase="evaluation")
+            emit("evaluation", steps, history[-1], phase="evaluation")
+            emit("complete", steps, phase="complete", reason="completed")
+        write_json(raw / "history.json", history)
+        write_json(raw / "evaluation.json", {"schema_version": 1, "simulation": True, "dataset_id": "dataset_v2",
+                    "validation_set": "valset_v1v2", "checkpoint": "best.pt", "step": steps, "metrics": history[-1]})
+        checkpoints = [{"name": name, "step": steps, "size": (raw / name).stat().st_size, "sha256": sha256_file(raw / name)}
+                       for name in ("best.pt", "last.pt")]
+        write_json(raw / "training-summary.json", {"schema_version": 1, "simulation": True, "status": "completed",
+                   "completed_steps": steps, "requested_steps": steps, "batch_size": run["config"]["batch_size"],
+                   "seed": run["config"]["seed"], "optimizer_updates": steps, "dataset_id": "dataset_v2", "checkpoints": checkpoints,
+                   "evaluation": "evaluation.json"})
+        publish_training(raw, job_dir / "published", read_json(directory / "stage.json")["provenance"],
+                         job_dir / "result-manifest.json", run["config"],
+                         checkpoint_validator=lambda path: {"step": read_json(path)["step"]})
+        with (directory / "logs" / f"slurm-{job['job_id']}.out").open("a") as stream:
+            stream.write(f"LOCAL SIMULATION: step {steps}/{steps}; held-out MRR {history[-1]['mrr']:.3f}.\nSynthetic best.pt, last.pt and evaluation.json retained. No model was trained.\n")
 
     def logs(self, run: dict, jobs=None) -> str:
         jobs = jobs if jobs is not None else self.reconcile(run)

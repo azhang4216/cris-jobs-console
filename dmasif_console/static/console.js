@@ -29,11 +29,16 @@
   let polling = false;
   let pollRequested = false;
   let filterPollTimer;
-  let datasetsLoading = false;
-  let selectedDataset = null;
-  let datasetFilesPage = 1;
-  let datasetFilesController = null;
-  let datasetFilesRequest = 0;
+  let trainingEventsController = null;
+  let trainingEventsRequest = 0;
+  let trainingBefore = null;
+  let trainingPageStack = [];
+  let trainingNextBefore = null;
+  let trainingKind = "";
+  let trainingStep = "";
+  let previousTrainingRows = "";
+  let previousTrainingSummary = "";
+  let trainingEventsLoaded = false;
 
   function node(tag, className, value) {
     const element = document.createElement(tag);
@@ -45,6 +50,188 @@
   function readable(value) {
     if (value === null || value === undefined) return "";
     return typeof value === "object" ? JSON.stringify(value, null, 2) : String(value);
+  }
+
+  function isTraining(run) {
+    const training = run?.training || {};
+    return run?.config?.job_type === "dmasif_train" || Boolean(training.phase || training.event_count);
+  }
+
+  function phaseLabel(phase) {
+    const phases = { training: "Training", evaluation: "Evaluating held-out data", checkpoint: "Saving checkpoint", completed: "Completed", starting: "Starting" };
+    return phases[phase] || String(phase || "Waiting to start").replaceAll("_", " ");
+  }
+
+  function artifactLabel(name) {
+    const extension = String(name || "").split(".").at(-1);
+    return /^[A-Za-z0-9]{1,6}$/.test(extension) ? extension.toUpperCase() : "FILE";
+  }
+
+  function metricNodes(metrics) {
+    if (!metrics || typeof metrics !== "object" || Array.isArray(metrics)) return [];
+    return Object.entries(metrics).map(([key, value]) => {
+      const field = node("div");
+      const number = node("dd", "mono", value === null ? "—" : readable(value));
+      if (value !== null) number.title = readable(value);
+      field.append(node("dt", "", key), number);
+      return field;
+    });
+  }
+
+  function renderTraining(run) {
+    const enabled = isTraining(run);
+    for (const id of ["training-overview", "evaluation-panel", "checkpoints-panel", "training-events-panel"]) {
+      document.getElementById(id).hidden = !enabled;
+    }
+    document.getElementById("legacy-training-note").hidden = enabled;
+    const batch = run.config?.batch_size;
+    document.getElementById("detail-batch-row").hidden = !Number.isInteger(batch);
+    document.getElementById("detail-batch").textContent = Number.isInteger(batch) ? String(batch) : "—";
+    if (!enabled) return;
+    const training = run.training || {};
+    const fingerprint = JSON.stringify([training, batch]);
+    if (fingerprint === previousTrainingSummary) return;
+    previousTrainingSummary = fingerprint;
+    const step = Number.isInteger(training.step) ? training.step : null;
+    const total = Number.isInteger(training.total_steps) && training.total_steps > 0 ? training.total_steps : null;
+    document.getElementById("training-phase").textContent = phaseLabel(training.phase);
+    document.getElementById("training-step").textContent = step === null ? "—" : `${step.toLocaleString()}${total ? ` / ${total.toLocaleString()}` : ""}`;
+    document.getElementById("training-batch").textContent = Number.isInteger(batch) ? String(batch) : "—";
+    document.getElementById("training-updated").replaceChildren(timeNode(training.last_event_at));
+    document.getElementById("training-progress-track").hidden = step === null || total === null;
+    const progress = document.getElementById("training-progress");
+    progress.max = total || 1;
+    progress.value = Math.max(0, Math.min(step || 0, total || 1));
+    const reason = document.getElementById("training-complete-reason");
+    reason.textContent = training.complete_reason || "";
+    reason.hidden = !training.complete_reason;
+    const metrics = metricNodes(training.latest_metrics);
+    document.getElementById("latest-metrics").replaceChildren(...metrics);
+    document.getElementById("latest-metrics-empty").hidden = metrics.length > 0;
+    const evaluation = training.latest_evaluation || {};
+    document.getElementById("evaluation-metrics").replaceChildren(...metricNodes(evaluation.metrics));
+    const context = document.getElementById("evaluation-context");
+    if (Object.keys(evaluation).length) {
+      context.replaceChildren(document.createTextNode(`Step ${evaluation.step ?? "—"} · `), timeNode(evaluation.timestamp));
+    } else context.textContent = "Evaluation runs automatically on held-out data, separately from training.";
+    const checkpoints = (Array.isArray(training.checkpoints) ? training.checkpoints : []).map((checkpoint) => {
+      const item = node("li");
+      item.append(node("strong", "mono", checkpoint.name || "Checkpoint"), node("span", "", `Step ${checkpoint.step ?? "—"}`), timeNode(checkpoint.timestamp));
+      return item;
+    });
+    document.getElementById("training-checkpoints").replaceChildren(...(checkpoints.length ? checkpoints : [node("li", "muted", "No checkpoint reported yet.")]));
+  }
+
+  function trainingEventRow(event) {
+    const row = node("tr");
+    row.dataset.sequence = String(event.seq ?? "");
+    const labels = { step: "Training", evaluation: "Evaluation", checkpoint: "Checkpoint", start: "Started", complete: "Completed" };
+    const kind = Object.hasOwn(labels, event.kind) ? labels[event.kind] : "Update";
+    const step = node("td", "mono", event.step ?? "—");
+    const type = node("td");
+    type.append(node("span", `event-kind${event.kind === "evaluation" ? " event-evaluation" : event.kind === "checkpoint" ? " event-checkpoint" : ""}`, kind));
+    const time = node("td", "time-cell"); time.append(timeNode(event.timestamp));
+    const details = node("td", "event-details");
+    if (event.name) details.append(node("strong", "mono checkpoint-name", event.name));
+    if (event.phase) details.append(node("span", "cell-secondary", phaseLabel(event.phase)));
+    const metrics = metricNodes(event.metrics);
+    if (metrics.length) {
+      const fields = node("dl", "event-metrics");
+      fields.append(...metrics); details.append(fields);
+    }
+    if (event.reason) details.append(node("p", "small-note", event.reason));
+    if (!details.childNodes.length) details.append(node("span", "muted", "No metrics in this event."));
+    row.append(step, type, time, details);
+    return row;
+  }
+
+  async function loadTrainingEvents({ reset = false, refresh = false, pageChange = false } = {}) {
+    if (!isTraining(latestDetailRun)) return;
+    // Polling never moves a researcher away from an older page they are reading.
+    if (refresh && (trainingBefore !== null || trainingEventsController)) return;
+    if (reset) {
+      trainingBefore = null;
+      trainingPageStack = [];
+      trainingNextBefore = null;
+    }
+    if (reset || pageChange) {
+      trainingEventsLoaded = false;
+      previousTrainingRows = "";
+      document.getElementById("training-events-body").replaceChildren();
+      document.getElementById("training-events-table").hidden = true;
+    }
+    trainingEventsController?.abort();
+    const controller = new AbortController();
+    trainingEventsController = controller;
+    const request = ++trainingEventsRequest;
+    const panel = document.getElementById("training-events-panel");
+    const message = document.getElementById("training-events-message");
+    const retry = document.getElementById("training-retry");
+    panel.setAttribute("aria-busy", "true");
+    retry.hidden = true;
+    document.getElementById("training-newer").disabled = true;
+    document.getElementById("training-older").disabled = true;
+    if (!trainingEventsLoaded) {
+      message.textContent = "Loading training events…";
+      message.hidden = false;
+    }
+    message.classList.remove("connection-stale");
+    const query = new URLSearchParams({ limit: "50" });
+    if (trainingKind) query.set("kind", trainingKind);
+    if (trainingStep !== "") query.set("step", trainingStep);
+    if (trainingBefore !== null) query.set("before_seq", String(trainingBefore));
+    const id = encodeURIComponent(String(latestDetailRun.id));
+    const timeout = setTimeout(() => controller.abort(), 12000);
+    try {
+      const response = await fetch(`${apiBase}/api/runs/${id}/training-events?${query}`, {
+        headers: { Accept: "application/json" }, credentials: "omit", cache: "no-store", signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`Training events returned ${response.status}`);
+      const data = await response.json();
+      if (request !== trainingEventsRequest) return;
+      if (!Array.isArray(data.events) || !data.events.every((event) => event && typeof event === "object")) throw new Error("Invalid training events");
+      const fingerprint = JSON.stringify(data.events);
+      if (fingerprint !== previousTrainingRows) {
+        previousTrainingRows = fingerprint;
+        const table = document.getElementById("training-events-table");
+        const scrollTop = table.scrollTop;
+        document.getElementById("training-events-body").replaceChildren(...data.events.map(trainingEventRow));
+        table.scrollTop = scrollTop;
+      }
+      trainingEventsLoaded = true;
+      trainingNextBefore = Number.isInteger(data.next_before_seq) ? data.next_before_seq : null;
+      document.getElementById("training-events-table").hidden = data.events.length === 0;
+      message.hidden = data.events.length > 0;
+      message.textContent = trainingKind || trainingStep !== ""
+        ? "No events match these filters yet. Try another step or event type."
+        : "No training events yet. Steps, evaluations, and checkpoints appear here as they are reported.";
+      const total = Number.isInteger(data.total) ? ` of ${data.total.toLocaleString()} matching events` : " events";
+      document.getElementById("training-events-count").textContent = `${data.events.length}${total} · ${trainingBefore === null ? "newest first" : "older events; page held while live updates continue"}`;
+    } catch (error) {
+      if (request !== trainingEventsRequest) return;
+      message.hidden = false;
+      message.classList.add("connection-stale");
+      message.textContent = trainingEventsLoaded ? "Training updates delayed. Showing saved events; retry to refresh." : "Could not load training events. Retry to load them.";
+      retry.hidden = false;
+    } finally {
+      clearTimeout(timeout);
+      if (request === trainingEventsRequest) {
+        trainingEventsController = null;
+        panel.setAttribute("aria-busy", "false");
+        document.getElementById("training-newer").disabled = trainingPageStack.length === 0;
+        document.getElementById("training-older").disabled = trainingNextBefore === null;
+      }
+    }
+  }
+
+  function chooseTrainingKind(kind) {
+    trainingKind = kind;
+    trainingStep = "";
+    document.getElementById("training-kind").value = kind;
+    document.getElementById("training-step-filter").value = "";
+    loadTrainingEvents({ reset: true });
+    document.getElementById("training-events-title").focus({ preventScroll: true });
+    document.getElementById("training-events-panel").scrollIntoView({ block: "start", behavior: "instant" });
   }
 
   function publicProvenance(value) {
@@ -203,11 +390,16 @@
     if (run.source_kind === "slurm" && run.scheduler_job_id) identity.append(node("span", "cell-secondary", `Job ${run.scheduler_job_id}`));
     const researcher = node("td", "", run.actor_login || (run.source_kind === "slurm" ? "—" : "Unknown researcher"));
     const commit = node("td"); commit.append(commitNode(run));
-    const dataset = node("td"); dataset.append(node("span", "dataset-name", run.dataset_id || "—"));
+    const progress = node("td", "run-progress");
+    const training = run.training || {};
+    if (Number.isInteger(training.step)) {
+      progress.append(node("span", "mono", `Step ${training.step.toLocaleString()}${Number.isInteger(training.total_steps) ? ` / ${training.total_steps.toLocaleString()}` : ""}`));
+      if (training.phase) progress.append(node("span", "cell-secondary", phaseLabel(training.phase)));
+    } else progress.append(node("span", "muted", isTraining(run) ? "Waiting for training" : "—"));
     const state = node("td"); state.append(statusNode(run.state, run));
     const received = node("td", "nowrap time-cell"); received.append(timeNode(run.source_kind === "slurm" ? run.submitted_at : run.created_at));
     const runtime = node("td", "mono runtime-cell"); runtime.dataset.runtime = ""; updateRuntime(runtime, run);
-    row.append(identity, researcher, commit, dataset, state, received, runtime);
+    row.append(identity, researcher, commit, progress, state, received, runtime);
     return row;
   }
 
@@ -303,213 +495,6 @@
     renderActivity(Array.isArray(data.activity) ? data.activity : []);
   }
 
-  function datasetRowNode(dataset) {
-    const row = node("tr");
-    const identity = node("td");
-    identity.append(node("strong", "", dataset.name || dataset.dataset_id || "Unnamed collection"));
-    if (dataset.description) identity.append(node("span", "cell-secondary", dataset.description));
-    const identifier = node("td");
-    identifier.append(node("span", dataset.dataset_id ? "mono" : "muted", dataset.dataset_id || "Not registered"));
-    const count = Number.isInteger(dataset.file_count) && dataset.file_count >= 0 ? dataset.file_count.toLocaleString() : "—";
-    const files = node("td");
-    const fileCount = node("span", "mono", count);
-    if (count === "—") fileCount.title = "Coordinate-file count unavailable";
-    files.append(fileCount);
-    if (["registered", "release", "project"].includes(dataset.scope)) {
-      const browse = node("button", "dataset-browse", "Browse files");
-      browse.type = "button";
-      browse.disabled = !dataset.available;
-      browse.dataset.scope = dataset.scope;
-      browse.dataset.name = dataset.name;
-      browse.setAttribute("aria-controls", "dataset-files");
-      browse.setAttribute("aria-expanded", "false");
-      browse.setAttribute("aria-label", `Browse files in ${dataset.name}`);
-      browse.addEventListener("click", () => {
-        selectedDataset = { scope: dataset.scope, name: dataset.name };
-        updateDatasetBrowseButtons();
-        document.getElementById("dataset-files-title").textContent = `Coordinate files · ${dataset.name}`;
-        document.getElementById("dataset-files").hidden = false;
-        loadDatasetFiles(1);
-        document.getElementById("dataset-files-title").focus({ preventScroll: true });
-        document.getElementById("dataset-files").scrollIntoView({ block: "nearest" });
-      });
-      files.append(browse);
-    }
-    const state = node("td");
-    const registered = dataset.scope === "registered" && dataset.dataset_id;
-    state.append(node("span", `dataset-status${!dataset.available ? " dataset-unavailable" : registered ? " dataset-enabled" : ""}`,
-      !dataset.available ? "Inputs unavailable" : registered ? "Registered" : "Not registered"));
-    row.append(identity, identifier, files, state);
-    return row;
-  }
-
-  function updateDatasetBrowseButtons() {
-    document.querySelectorAll(".dataset-browse").forEach((button) => {
-      const expanded = selectedDataset?.scope === button.dataset.scope && selectedDataset?.name === button.dataset.name;
-      button.setAttribute("aria-expanded", String(expanded));
-    });
-  }
-
-  function resetDatasetFiles() {
-    datasetFilesRequest += 1;
-    datasetFilesController?.abort();
-    datasetFilesController = null;
-    selectedDataset = null;
-    datasetFilesPage = 1;
-    document.getElementById("dataset-files").hidden = true;
-    document.getElementById("dataset-files").setAttribute("aria-busy", "false");
-    document.getElementById("dataset-files-body").replaceChildren();
-    updateDatasetBrowseButtons();
-  }
-
-  function datasetFileRowNode(file) {
-    const row = node("tr");
-    row.append(node("td", "mono", file.model_id || "—"), node("td", "mono", file.relative_path || file.name || "—"),
-      node("td", "muted", file.format ? String(file.format).toUpperCase() : "—"));
-    return row;
-  }
-
-  async function loadDatasetFiles(pageNumber) {
-    if (!selectedDataset || datasetsLoading || !Number.isInteger(pageNumber) || pageNumber < 1 || pageNumber > 100000) return;
-    datasetFilesController?.abort();
-    const controller = new AbortController();
-    datasetFilesController = controller;
-    const request = ++datasetFilesRequest;
-    const timeout = setTimeout(() => controller.abort(), 45000);
-    datasetFilesPage = pageNumber;
-    const browser = document.getElementById("dataset-files");
-    const body = document.getElementById("dataset-files-body");
-    const table = document.getElementById("dataset-files-table");
-    const message = document.getElementById("dataset-files-message");
-    const retry = document.getElementById("dataset-files-retry");
-    const previous = document.getElementById("previous-dataset-files");
-    const next = document.getElementById("next-dataset-files");
-    const pageInput = document.getElementById("dataset-files-page");
-    const go = document.getElementById("go-dataset-files");
-    const truncated = document.getElementById("dataset-files-truncated");
-    const checked = document.getElementById("dataset-files-checked");
-    browser.setAttribute("aria-busy", "true");
-    body.replaceChildren();
-    table.hidden = true;
-    retry.hidden = true;
-    previous.disabled = true;
-    next.disabled = true;
-    pageInput.disabled = true;
-    go.disabled = true;
-    truncated.hidden = true;
-    checked.replaceChildren();
-    pageInput.value = String(pageNumber);
-    message.dataset.state = "loading";
-    message.classList.remove("sr-only");
-    message.textContent = "Loading coordinate files…";
-    try {
-      const query = new URLSearchParams({ scope: selectedDataset.scope, name: selectedDataset.name, page: String(pageNumber), page_size: "50" });
-      const response = await fetch(`${apiBase}/api/datasets/files?${query}`, {
-        headers: { Accept: "application/json" }, credentials: "omit", cache: "no-store", signal: controller.signal,
-      });
-      if (!response.ok) throw new Error("Coordinate-file check failed");
-      const data = await response.json();
-      if (request !== datasetFilesRequest) return;
-      if (!Array.isArray(data.files) || data.files.length > 50 || data.page !== pageNumber
-        || !data.files.every((file) => file && typeof file === "object")) throw new Error("Invalid coordinate-file response");
-      body.replaceChildren(...data.files.map(datasetFileRowNode));
-      table.hidden = data.files.length === 0;
-      previous.disabled = pageNumber <= 1;
-      next.disabled = !data.has_more || pageNumber >= 100000;
-      truncated.hidden = !data.truncated;
-      checked.replaceChildren(document.createTextNode(`${data.source === "demo" ? "Demo data" : "Live cluster via SSH"} · Last checked `), timeNode(data.checked_at));
-      message.dataset.state = "ready";
-      message.textContent = data.files.length
-        ? `${data.files.length} coordinate files loaded on page ${pageNumber}${data.truncated ? "; the scan is incomplete" : ""}.`
-        : "No readable coordinate files on this page.";
-      message.classList.toggle("sr-only", data.files.length > 0);
-    } catch (error) {
-      if (request !== datasetFilesRequest) return;
-      message.dataset.state = "error";
-      message.classList.remove("sr-only");
-      message.textContent = controller.signal.aborted
-        ? "The coordinate-file check timed out. Retry to check again."
-        : "Could not load coordinate files. Retry to check the collection again.";
-      retry.hidden = false;
-      previous.disabled = pageNumber <= 1;
-    } finally {
-      clearTimeout(timeout);
-      if (request === datasetFilesRequest) {
-        datasetFilesController = null;
-        browser.setAttribute("aria-busy", "false");
-        pageInput.disabled = false;
-        go.disabled = false;
-      }
-    }
-  }
-
-  // This live SSH inventory is intentionally independent of run polling and filters.
-  async function refreshDatasets() {
-    if (datasetsLoading) return;
-    datasetsLoading = true;
-    resetDatasetFiles();
-    const panel = document.getElementById("datasets-panel");
-    const button = document.getElementById("refresh-datasets");
-    const body = document.getElementById("datasets-body");
-    const table = document.getElementById("datasets-table");
-    const count = document.getElementById("dataset-count");
-    const message = document.getElementById("datasets-message");
-    const footer = document.getElementById("datasets-footer");
-    const truncated = document.getElementById("datasets-truncated");
-    button.disabled = true;
-    button.textContent = "Refreshing…";
-    panel.setAttribute("aria-busy", "true");
-    body.replaceChildren();
-    table.hidden = true;
-    count.hidden = true;
-    footer.hidden = true;
-    truncated.hidden = true;
-    message.dataset.state = "loading";
-    message.classList.remove("sr-only");
-    message.textContent = "Loading available datasets…";
-    let succeeded = false;
-    try {
-      const response = await fetch(`${apiBase}/api/datasets`, {
-        headers: { Accept: "application/json" }, credentials: "omit", cache: "no-store", signal: AbortSignal.timeout(45000),
-      });
-      if (!response.ok) throw new Error("Dataset check failed");
-      const data = await response.json();
-      if (!Array.isArray(data.datasets) || !data.datasets.every((dataset) => dataset && typeof dataset === "object")) {
-        throw new Error("Invalid dataset response");
-      }
-      body.replaceChildren(...data.datasets.map(datasetRowNode));
-      count.textContent = String(data.datasets.length);
-      count.hidden = false;
-      table.hidden = data.datasets.length === 0;
-      truncated.hidden = !data.truncated;
-      const checked = document.getElementById("datasets-checked");
-      checked.replaceChildren(document.createTextNode(`${data.source === "demo" ? "Demo data" : "Live cluster via SSH"} · Last checked `), timeNode(data.checked_at));
-      footer.hidden = false;
-      message.dataset.state = "ready";
-      message.textContent = data.datasets.length
-        ? `${data.datasets.length} datasets and collections loaded${data.truncated ? "; the scan is incomplete" : ""}.`
-        : "No datasets or project data collections were found.";
-      message.classList.toggle("sr-only", data.datasets.length > 0);
-      succeeded = true;
-    } catch (error) {
-      body.replaceChildren();
-      table.hidden = true;
-      count.hidden = true;
-      footer.hidden = true;
-      truncated.hidden = true;
-      message.dataset.state = "error";
-      message.classList.remove("sr-only");
-      message.textContent = error.name === "TimeoutError" || error.name === "AbortError"
-        ? "The live dataset check timed out. Retry to check again."
-        : "Could not load available datasets. Retry to check the cluster again.";
-    } finally {
-      datasetsLoading = false;
-      button.disabled = false;
-      button.textContent = succeeded ? "Refresh" : "Retry";
-      panel.setAttribute("aria-busy", "false");
-    }
-  }
-
   function renderArtifacts(artifacts, source, noJobSubmitted) {
     const fingerprint = JSON.stringify([artifacts, source, noJobSubmitted]);
     if (fingerprint === previousArtifacts) return;
@@ -517,7 +502,7 @@
     document.getElementById("artifact-count").textContent = String(artifacts.length);
     const elements = artifacts.map((artifact) => {
       const row = node("div", "artifact-row");
-      const icon = node("div", "file-icon", "NPZ"); icon.setAttribute("aria-hidden", "true");
+      const icon = node("div", "file-icon", artifactLabel(artifact.name)); icon.setAttribute("aria-hidden", "true");
       const info = node("div", "artifact-info");
       const meta = node("span", "cell-secondary", bytes(artifact.size));
       if (artifact.sha256) {
@@ -624,6 +609,7 @@
     });
     document.querySelectorAll("[data-runtime]").forEach((element) => updateRuntime(element, run));
     document.getElementById("detail-dataset").textContent = run.dataset_id || "—";
+    renderTraining(run);
     for (const key of ["validation", "config", "provenance"]) {
       document.getElementById(`${key}-json`).textContent = JSON.stringify(key === "provenance" ? publicProvenance(run[key]) : (run[key] || {}), null, 2);
     }
@@ -658,6 +644,7 @@
         const data = await getJSON(`/api/runs/${encodeURIComponent(id)}`);
         renderDetail(data);
         renderObservation(data.observation);
+        await loadTrainingEvents({ refresh: true });
         if (typeof data.run?.log_tail !== "string") {
           const logs = await getJSON(`/api/runs/${encodeURIComponent(id)}/logs`);
           const noJobSubmitted = ["REJECTED", "PREPARATION_FAILED"].includes(data.run.state) && !data.run.submitted_at && !data.jobs?.length;
@@ -693,20 +680,6 @@
   }
   refreshMonitoring();
   if (page === "history") {
-    document.getElementById("refresh-datasets").addEventListener("click", refreshDatasets);
-    document.getElementById("retry-dataset-files").addEventListener("click", () => loadDatasetFiles(datasetFilesPage));
-    document.getElementById("previous-dataset-files").addEventListener("click", () => loadDatasetFiles(datasetFilesPage - 1));
-    document.getElementById("next-dataset-files").addEventListener("click", () => loadDatasetFiles(datasetFilesPage + 1));
-    document.getElementById("dataset-page-form").addEventListener("submit", (event) => {
-      event.preventDefault();
-      loadDatasetFiles(document.getElementById("dataset-files-page").valueAsNumber);
-    });
-    document.getElementById("close-dataset-files").addEventListener("click", () => {
-      const browse = document.querySelector('.dataset-browse[aria-expanded="true"]');
-      resetDatasetFiles();
-      browse?.focus({ preventScroll: true });
-    });
-    refreshDatasets();
     const form = document.getElementById("run-filters");
     form.addEventListener("submit", (event) => { event.preventDefault(); onFilterChange(); });
     form.addEventListener("input", onFilterChange);
@@ -719,6 +692,40 @@
     applyFilters();
   }
   if (page === "detail") {
+    const trainingForm = document.getElementById("training-filters");
+    function applyTrainingFilters() {
+      if (!trainingForm.reportValidity()) return;
+      const step = document.getElementById("training-step-filter").value;
+      if (step !== "" && (!Number.isSafeInteger(Number(step)) || Number(step) < 0)) return;
+      trainingKind = document.getElementById("training-kind").value;
+      trainingStep = step === "" ? "" : String(Number(step));
+      loadTrainingEvents({ reset: true });
+    }
+    trainingForm.addEventListener("submit", (event) => { event.preventDefault(); applyTrainingFilters(); });
+    document.getElementById("training-kind").addEventListener("change", applyTrainingFilters);
+    trainingForm.addEventListener("reset", (event) => {
+      event.preventDefault();
+      document.getElementById("training-kind").value = "";
+      document.getElementById("training-step-filter").value = "";
+      applyTrainingFilters();
+    });
+    document.getElementById("training-newest").addEventListener("click", () => loadTrainingEvents({ reset: true }));
+    document.getElementById("training-retry").addEventListener("click", () => loadTrainingEvents());
+    document.getElementById("training-older").addEventListener("click", () => {
+      if (trainingNextBefore === null || trainingEventsController) return;
+      trainingPageStack.push(trainingBefore);
+      trainingBefore = trainingNextBefore;
+      trainingNextBefore = null;
+      loadTrainingEvents({ pageChange: true });
+    });
+    document.getElementById("training-newer").addEventListener("click", () => {
+      if (!trainingPageStack.length || trainingEventsController) return;
+      trainingBefore = trainingPageStack.pop();
+      trainingNextBefore = null;
+      loadTrainingEvents({ pageChange: true });
+    });
+    document.getElementById("view-evaluations").addEventListener("click", () => chooseTrainingKind("evaluation"));
+    document.getElementById("view-checkpoints").addEventListener("click", () => chooseTrainingKind("checkpoint"));
     const output = document.getElementById("log-output");
     output.scrollTop = output.scrollHeight;
     output.addEventListener("scroll", () => {

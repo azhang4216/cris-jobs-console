@@ -1,5 +1,7 @@
 # Install the fixed cluster adapter
 
+> Historical extraction adapter guide. For the current training adapter, fixed dataset registration, runtime policy, and acceptance steps, use [training deployment](training-deployment.md).
+
 Use this procedure to install a managed release in a new application root. Preserve the existing research checkout, working sandbox, and test outputs. The live submission setup and acceptance checks are described in [live-submissions.md](live-submissions.md).
 
 ## Required runtime contract

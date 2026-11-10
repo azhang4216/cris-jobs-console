@@ -37,11 +37,15 @@ class ExperimentConfigError(SourceError):
 
 _FIELD_REQUIREMENTS = {
     "schema_version": "Must be the integer 1.",
-    "job_type": "Must be dmasif_extract.",
+    "job_type": "Must be dmasif_extract or dmasif_train.",
     "dataset_id": "Must be a string of 1–100 letters, digits, periods, underscores, or hyphens.",
-    "preset_id": "Must be quick-test.",
+    "preset_id": "Must be quick-test for extraction or training for dmasif_train.",
     "seed": "Must be an integer from 0 to 4294967295 (without quotes).",
     "repeat_id": "Must be a string of 1–100 letters, digits, periods, underscores, or hyphens.",
+    "batch_size": "Must be an integer from 2 to 128.",
+    "steps": "Must be an integer from 1 to 1000000.",
+    "eval_every": "Must be an integer from 1 to 1000000.",
+    "save_every": "Must be an integer from 1 to 1000000.",
 }
 
 
@@ -219,9 +223,6 @@ def snapshot_source(settings, commit_sha: str) -> dict:
         source_dir = bundle / "source"
         source_dir.mkdir(parents=True)
         _extract_plain(tar_path, source_dir, settings.max_source_bytes)
-        for required in ("affinity/extract.py",):
-            if not (source_dir / required).is_file():
-                raise SourceError(f"Commit is missing required file: {required}.")
         archive = bundle / "source.tar.gz"
         with tar_path.open("rb") as stream, archive.open("wb") as target:
             with gzip.GzipFile(filename="", mode="wb", fileobj=target, mtime=0) as compressed:
@@ -234,7 +235,7 @@ def snapshot_source(settings, commit_sha: str) -> dict:
 
 def read_experiment(source: dict) -> tuple[dict, str]:
     """Read bounded configuration from the retained archive (not mutable extraction)."""
-    from .config import ExperimentConfig
+    from .config import ExperimentConfig, TrainingExperimentConfig
 
     original = None
     try:
@@ -254,7 +255,8 @@ def read_experiment(source: dict) -> tuple[dict, str]:
         parsed = yaml.load(original, Loader=_ExperimentLoader)
         if not isinstance(parsed, dict):
             raise ExperimentConfigError([{"sample": "experiments/run.yaml", "reason": "Use a YAML mapping of field names to values, not a list or a single value."}], original)
-        config = ExperimentConfig.model_validate(parsed)
+        model = TrainingExperimentConfig if parsed.get("job_type") == "dmasif_train" else ExperimentConfig
+        config = model.model_validate(parsed)
     except SourceError:
         raise
     except ValidationError as exc:
@@ -265,11 +267,13 @@ def read_experiment(source: dict) -> tuple[dict, str]:
             if field in _FIELD_REQUIREMENTS:
                 sample = "experiments/run.yaml." + field
                 reason = ("Required. " if error["type"] == "missing" else "") + _FIELD_REQUIREMENTS[field]
+                if model is TrainingExperimentConfig and field in {"dataset_id", "preset_id"}:
+                    reason = "Must be dataset_v2 for training." if field == "dataset_id" else "Must be training for dmasif_train."
             else:
                 # Unknown keys and validation messages can contain arbitrary
                 # submitted secrets. Use only fixed schema labels in public.
                 sample = "experiments/run.yaml"
-                reason = "Only schema_version, job_type, dataset_id, preset_id, seed, and repeat_id are accepted; command/script options are not supported."
+                reason = "Only schema_version, job_type, dataset_id, preset_id, seed, repeat_id, and the documented training integers are accepted; command/script options are not supported."
             if sample not in seen:
                 errors.append({"sample": sample, "reason": reason})
                 seen.add(sample)
@@ -282,4 +286,10 @@ def read_experiment(source: dict) -> tuple[dict, str]:
         raise ExperimentConfigError([{"sample": "experiments/run.yaml", "reason": reason + location + "."}], original) from exc
     except UnicodeDecodeError as exc:
         raise ExperimentConfigError([{"sample": "experiments/run.yaml", "reason": "Save this file as UTF-8 text."}]) from exc
+    required = ("src/run_experiment.py", "src/train.py", "src/surface_encoder.py", "dMaSIF/model.py") if config.job_type == "dmasif_train" else ("affinity/extract.py",)
+    with tarfile.open(source["archive_path"], "r:gz") as archive:
+        files = {member.name for member in archive.getmembers() if member.isfile()}
+        for name in required:
+            if name not in files:
+                raise SourceError(f"Commit is missing required file: {name}.")
     return config.model_dump(), original

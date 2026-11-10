@@ -1,4 +1,4 @@
-"""Four-table durable state store; transactions protect acceptance and capacity."""
+"""Durable state store; transactions protect acceptance, capacity, and progress."""
 from __future__ import annotations
 
 import json
@@ -49,10 +49,13 @@ class Store:
         with self.connection() as con:
             con.execute("PRAGMA journal_mode = WAL")
             version = con.execute("PRAGMA user_version").fetchone()[0]
-            if version > 1:
+            if version > 2:
                 raise RuntimeError("database schema is newer than this service")
-            sql = (Path(__file__).parent / "migrations/001_initial.sql").read_text()
-            con.executescript(sql)
+            migrations = Path(__file__).parent / "migrations"
+            if version < 1:
+                con.executescript((migrations / "001_initial.sql").read_text())
+            if version < 2:
+                con.executescript((migrations / "002_training_events.sql").read_text())
         self.path.chmod(0o600)
 
     @staticmethod

@@ -33,6 +33,9 @@ def test_empty_history_links_to_repository_instructions_without_browser_write_co
     assert "How to run an experiment" in page
     assert 'method="post"' not in page.lower()
     assert 'type="file"' not in page.lower()
+    assert "Training progress" in page
+    assert "Available datasets" not in page
+    assert "datasets-panel" not in page
 
 
 def test_untrusted_run_strings_and_logs_are_escaped(templates, common):
@@ -99,3 +102,51 @@ def test_history_omits_global_operator_pause_notice(templates, common):
     assert "New submissions paused." not in page
     assert "Inspecting" not in page
     assert "Up to 200 matches" in page
+
+
+def test_training_detail_prioritizes_steps_evaluation_and_checkpoints(templates, common):
+    run = {
+        "id": "train-1", "state": "RUNNING", "dataset_id": "dataset_v2",
+        "config": {"job_type": "dmasif_train", "batch_size": 8, "steps": 1000},
+        "training": {
+            "phase": "training", "step": 250, "total_steps": 1000,
+            "latest_metrics": {"loss": 0.32, "custom_head_loss": None},
+            "latest_evaluation": {"step": 200, "timestamp": "2026-11-10T17:00:00Z", "metrics": {"recall_at_1": 0.48}},
+            "checkpoints": [{"name": "latest.pt", "step": 200, "timestamp": "2026-11-10T17:00:01Z"}],
+        },
+        "artifacts": [{"name": "latest.pt", "cached": False, "size": 123}],
+    }
+    page = templates.get_template("detail.html").render(**common, run=run, jobs=[], events=[])
+    assert page.index('id="training-title"') < page.index('id="logs-title"')
+    assert page.index('id="evaluation-title"') < page.index('id="logs-title"')
+    assert page.index('id="checkpoints-title"') < page.index('id="logs-title"')
+    for text in ("custom_head_loss", "recall_at_1", "latest.pt", "Batch size", "Go to step", "Download all metrics"):
+        assert text in page
+    assert 'id="training-progress" max="1000" value="250"' in page
+    assert 'class="file-icon" aria-hidden="true">PT</div>' in page
+    assert "recent output only" in page
+
+
+@pytest.mark.parametrize("job_type", [None, "dmasif_train"])
+def test_training_detail_handles_queued_and_older_runs(templates, common, job_type):
+    run = {"id": "new", "state": "QUEUED", "config": {"job_type": job_type}, "training": {}}
+    page = templates.get_template("detail.html").render(**common, run=run, jobs=[], events=[])
+    assert "Metrics will appear when the first training step is reported." in page
+    assert "No checkpoint reported yet." in page
+    overview = page.split('id="training-overview"', 1)[1].split(">", 1)[0]
+    assert ("hidden" in overview) is (job_type is None)
+
+
+def test_training_metrics_and_checkpoint_names_are_escaped(templates, common):
+    attack = '<img src=x onerror="alert(1)">'
+    run = {
+        "id": "train", "config": {"job_type": "dmasif_train"},
+        "training": {
+            "latest_metrics": {attack: 1}, "phase": attack,
+            "latest_evaluation": {"metrics": {attack: 2}},
+            "checkpoints": [{"name": attack, "step": 3}], "complete_reason": attack,
+        },
+    }
+    page = templates.get_template("detail.html").render(**common, run=run, jobs=[], events=[])
+    assert attack not in page
+    assert "&lt;img" in page

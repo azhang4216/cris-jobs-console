@@ -34,6 +34,10 @@ def fixture(tmp_path, monkeypatch):
         member = tarfile.TarInfo("experiments/run.yaml")
         member.size = len(config)
         output.addfile(member, io.BytesIO(config))
+        extractor = b"# Retained extraction source fixture\n"
+        member = tarfile.TarInfo("affinity/extract.py")
+        member.size = len(extractor)
+        output.addfile(member, io.BytesIO(extractor))
     source = {"commit_sha": commit, "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
               "archive_path": str(archive), "source_dir": str(directory / "source")}
     response = store.accept_delivery("hook", "one", "b" * 64, {}, "ACCEPTED", "", {
@@ -49,6 +53,10 @@ def fixture(tmp_path, monkeypatch):
 
 def test_snapshot_restores_database_dedup_and_immutable_source_without_credentials(fixture, tmp_path, monkeypatch):
     settings, store, run_id, archive = fixture
+    from dmasif_console.training import event_page, ingest_chunk
+    text = json.dumps({"schema_version": 1, "seq": 1, "kind": "step", "step": 42,
+                       "timestamp": "2026-11-10T18:00:00Z", "metrics": {"loss": .3}}) + "\n"
+    ingest_chunk(store, run_id, {"offset": 0, "next_offset": len(text.encode()), "text": text, "eof": True})
     destination = tmp_path / "backups" / "first"
     with Worker(settings):
         create_backup(store, settings.state_dir, settings.mode, destination)
@@ -63,6 +71,8 @@ def test_snapshot_restores_database_dedup_and_immutable_source_without_credentia
     monkeypatch.setattr("dmasif_console.worker.get_adapter", lambda settings: SimpleNamespace(inventory=lambda: []))
     _restore(restored_settings, destination, "operator", "test restoration")
     recovered = Store(restored_settings.database_path)
+    assert event_page(recovered, run_id)["events"][0]["step"] == 42
+    assert recovered.get_run(run_id)["training_cursor"] == len(text.encode())
     assert recovered.get_run(run_id).get("reason") != "Changed after backup"
     assert recovered.control_state()["paused"] is True
     assert recovered.accept_delivery("hook", "new-header", "b" * 64, {}, "ACCEPTED", "", {})["duplicate"] is True

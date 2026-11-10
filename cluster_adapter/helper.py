@@ -22,11 +22,13 @@ import tempfile
 
 try:
     from .common import AdapterError, canonical, claim, contained, digest, input_manifest, job_id, read_json, run_id, safe_extract, sha256_file, utcnow, verify_tree, write_json
+    from .training import TRAINING_SOURCE_FILES, dataset_manifest, is_training, stage_inputs, telemetry_chunk, verify_inputs
 except ImportError:
     from common import AdapterError, canonical, claim, contained, digest, input_manifest, job_id, read_json, run_id, safe_extract, sha256_file, utcnow, verify_tree, write_json
+    from training import TRAINING_SOURCE_FILES, dataset_manifest, is_training, stage_inputs, telemetry_chunk, verify_inputs
 
 TERMINAL = {"COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "OUT_OF_MEMORY", "NODE_FAIL", "BOOT_FAIL", "DEADLINE", "PREEMPTED", "REVOKED"}
-MODULE_FILES = ("__init__.py", "common.py", "helper.py", "batch.py", "execute.py", "validate.py")
+MODULE_FILES = ("__init__.py", "common.py", "helper.py", "batch.py", "execute.py", "validate.py", "training.py")
 
 
 def absolute(value: str) -> Path:
@@ -105,7 +107,8 @@ class Helper:
         self.root.mkdir(parents=True, exist_ok=True)
         if shutil.disk_usage(self.root).free < int(limits.get("min_free_bytes", 1024 * 1024 * 1024)):
             raise AdapterError("Cluster storage is below the configured free-space threshold")
-        manifest = input_manifest(run["resolved"]["dataset"]["entries"])
+        training = is_training(run)
+        manifest = dataset_manifest(run["resolved"]["dataset"]) if training else input_manifest(run["resolved"]["dataset"]["entries"])
         identity = {"run": run, "source": {"sha256": source_hash, "commit_sha": source["commit_sha"]}, "inputs": manifest}
         identity_hash = hashlib.sha256(canonical(identity)).hexdigest()
         directory.parent.mkdir(parents=True, exist_ok=True)
@@ -135,7 +138,8 @@ class Helper:
                     raise AdapterError("Source archive size or checksum mismatch")
                 archive = temporary / "source.tar.gz"
                 archive.write_bytes(data)
-                files = safe_extract(archive, temporary / "tree", source_limit)
+                files = safe_extract(archive, temporary / "tree", source_limit,
+                                     required_files=TRAINING_SOURCE_FILES if training else ("affinity/extract.py",))
                 write_json(temporary / "manifest.json", {"archive_sha256": source_hash, "files": files}, exclusive=True)
                 try:
                     temporary.rename(source_root)
@@ -154,8 +158,9 @@ class Helper:
             if not path.is_file() or path.is_symlink() or sha256_file(path) != digest(checksum):
                 raise AdapterError("Runtime or checkpoint checksum mismatch")
         (directory / "inputs").mkdir(exist_ok=True)
+        training_stage = stage_inputs(directory, run["resolved"]["dataset"], manifest) if training else None
         total = 0
-        for entry in manifest:
+        for entry in ([] if training else manifest):
             original = absolute(entry["original_path"])
             if not original.is_file() or original.is_symlink():
                 raise AdapterError("Dataset input is missing or is not a regular file")
@@ -179,7 +184,7 @@ class Helper:
                 raise AdapterError("Copied input checksum mismatch")
         write_json(directory / "inputs.json", manifest)
         lines = []
-        for entry in manifest:
+        for entry in ([] if training else manifest):
             # Comma notation preserves multi-character labels; one single label
             # must be followed by a comma to avoid upstream character splitting.
             chain_spec = ",".join(entry["chains"]) + ("," if len(entry["chains"]) == 1 else "")
@@ -205,6 +210,11 @@ class Helper:
                 raise AdapterError("Pinned adapter changed")
         provenance = {"source_sha256": source_hash, "commit_sha": source["commit_sha"], "runtime_sha256": cluster["runtime_sha256"], "checkpoint_sha256": cluster["checkpoint_sha256"], "adapter_sha256": adapter_hash, "adapter_version": cluster.get("adapter_version", "1.0.0"), "requested_gpu_count": requested_gpu_count, "inputs": manifest}
         stage = {"remote_dir": str(directory), "source_dir": str(source_root / "tree"), "adapter_dir": str(adapter), "runtime_image": str(runtime), "runtime_unsquash": unsquash, "checkpoint_path": str(checkpoint), "provenance": provenance}
+        if training_stage:
+            stage["training"] = training_stage
+            provenance.update(dataset_id="dataset_v2", dataset_hashes=training_stage["dataset_hashes"],
+                              original_items_sha256=training_stage["original_items_sha256"],
+                              normalized_items_sha256=training_stage["items_sha256"])
         (directory / "logs").mkdir(exist_ok=True)
         (directory / "jobs").mkdir(exist_ok=True)
         (directory / "submit.sbatch").write_text(self.batch_script(directory, adapter, cluster))
@@ -215,20 +225,29 @@ class Helper:
         source_root = Path(stage["source_dir"]).parent
         source = read_json(source_root / "manifest.json")
         verify_tree(source_root / "tree", source["files"])
-        for entry in read_json(directory / "inputs.json"):
-            if sha256_file(contained(directory / "inputs", entry["name"])) != entry["sha256"]:
-                raise AdapterError("Staged dataset changed")
+        if stage.get("training"):
+            verify_inputs(directory, stage["training"])
+        else:
+            for entry in read_json(directory / "inputs.json"):
+                if sha256_file(contained(directory / "inputs", entry["name"])) != entry["sha256"]:
+                    raise AdapterError("Staged dataset changed")
 
     def batch_script(self, directory: Path, adapter: Path, cluster: dict) -> str:
         # Only operator-controlled preset values can reach this template.
         cpus, memory, minutes = int(cluster.get("cpus", 8)), int(cluster.get("memory_gb", 64)), int(cluster.get("wall_minutes", 15))
-        if not (1 <= cpus <= 8 and 1 <= memory <= 64 and 1 <= minutes <= 15 and cluster.get("qos", "test") == "test"):
+        training = cluster.get("preset_kind") == "training"
+        if training:
+            if not (1 <= cpus <= 8 and 1 <= memory <= 96 and 30 <= minutes <= 720 and cluster.get("gpus") == 1):
+                raise AdapterError("Resources exceed the registered training limits")
+        elif not (1 <= cpus <= 8 and 1 <= memory <= 64 and 1 <= minutes <= 15 and cluster.get("qos", "test") == "test"):
             raise AdapterError("Resources exceed the tested quick-test limits")
         _, gpu_request = gpu_allocation(cluster)
+        qos = cluster.get("qos", "test")
+        qos_lines = ["#SBATCH --qos=" + scheduler_token(qos)] if qos is not None else []
         return "\n".join([
             "#!/bin/bash", f"#SBATCH --account={scheduler_token(cluster['account'])}",
-            f"#SBATCH --partition={scheduler_token(cluster['partition'])}", "#SBATCH --qos=test", f"#SBATCH --gres={gpu_request}",
-            f"#SBATCH --cpus-per-task={cpus}", f"#SBATCH --mem={memory}G", f"#SBATCH --time=00:{minutes:02d}:00",
+            f"#SBATCH --partition={scheduler_token(cluster['partition'])}", *qos_lines, f"#SBATCH --gres={gpu_request}",
+            f"#SBATCH --cpus-per-task={cpus}", f"#SBATCH --mem={memory}G", f"#SBATCH --time={minutes // 60:02d}:{minutes % 60:02d}:00",
             f"#SBATCH --output={directory}/logs/slurm-%j.out", f"#SBATCH --error={directory}/logs/slurm-%j.err",
             "#SBATCH --open-mode=append", "#SBATCH --no-requeue", "set -euo pipefail", "umask 077", "unset PYTHONPATH PYTHONHOME", "export PYTHONNOUSERSITE=1", "module load apptainer",
             "exec python3 " + shlex.quote(str(adapter / "batch.py")) + " " + shlex.quote(str(directory)) + ' "$SLURM_JOB_ID"', "",
@@ -358,6 +377,10 @@ class Helper:
             raise AdapterError("Multiple execution manifests require operator review")
         return manifests[0] if manifests else None
 
+    def telemetry(self, payload: dict) -> dict:
+        return telemetry_chunk(self.directory(payload["run_id"]), payload.get("jobs", []),
+                               payload.get("offset", 0), payload.get("max_bytes", 262144))
+
     def artifact(self, payload: dict) -> dict:
         directory = self.directory(payload["run_id"])
         artifact = payload["artifact"]
@@ -404,7 +427,7 @@ def main() -> None:
     os.umask(0o077)
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", required=True)
-    parser.add_argument("operation", choices=("stage", "submit", "reconcile", "status", "logs", "result", "artifact", "cancel", "inventory"))
+    parser.add_argument("operation", choices=("stage", "submit", "reconcile", "status", "logs", "result", "artifact", "telemetry", "cancel", "inventory"))
     args = parser.parse_args()
     try:
         raw = sys.stdin.buffer.read(75 * 1024 * 1024 + 1)

@@ -1,0 +1,69 @@
+# Copy to ignored deploy/private/operator.yaml or config/local.yaml.
+# Replace every REPLACE_* value before use; this example intentionally fails validation.
+# Training activation and a real GPU acceptance run are separate operator steps.
+mode: ssh
+state_dir: /var/lib/dmasif-console
+submissions_enabled: false
+operator_contact: "Your lab operator: operator@example.org"
+poll_seconds: 30
+dashboard_poll_seconds: 15
+repository:
+  id: REPLACE_WITH_REPOSITORY_NUMERIC_ID
+  full_name: azhang4216/dmasif-experiments
+  clone_url: https://github.com/azhang4216/dmasif-experiments.git
+allowed_actor_ids: [REPLACE_WITH_GITHUB_NUMERIC_ID]
+hook_id: dmasif-lab-push
+# Secrets are supplied through protected runtime files, never this example.
+# DMASIF_WEBHOOK_SECRET_FILE, DMASIF_SSH_KEY, DMASIF_KNOWN_HOSTS,
+# and DMASIF_REPOSITORY_TOKEN_FILE are configured on the application host.
+datasets:
+  dataset_v2:
+    kind: training
+    description: "Fixed dataset_v2 training; separate valset_v1v2 held-out evaluation"
+    project_root: /srv/lab/prepared-project
+    # Absolute prefix embedded in the existing items.tsv; may differ from project_root.
+    # Only a per-run copy is normalized to /dataset. The original is unchanged.
+    source_prefix: /srv/lab/original-project
+    hashes:
+      index: REPLACE_WITH_INDEX_PARQUET_SHA256
+      inputs: REPLACE_WITH_INPUTS_TXT_SHA256
+      items: REPLACE_WITH_ITEMS_TSV_SHA256
+      ligand_feats: REPLACE_WITH_LIGAND_FEATS_NPZ_SHA256
+      val_set: REPLACE_WITH_VAL_SET_TSV_SHA256
+      holdout_groups: REPLACE_WITH_HOLDOUT_GROUPS_TXT_SHA256
+      val_provenance: REPLACE_WITH_VAL_PROVENANCE_JSON_SHA256
+      head: REPLACE_WITH_HEAD_CHECKPOINT_SHA256
+presets:
+  training:
+    kind: training
+    gpus: 1
+    cpus: 8
+    memory_gb: 96
+    wall_minutes: 720
+    # Do not inherit extraction's short test QoS. Set only a site-approved QoS.
+    qos: null
+cluster:
+  host: login.example.invalid
+  user: service-user
+  root: /srv/lab/job_console
+  helper_path: /srv/lab/job_console/releases/adapters/training-v1/helper.py
+  adapter_version: training-v1
+  account: lab-account
+  partition: gpu
+  # Select the actual site-approved GRES type after validating the runtime.
+  # null requests one untyped GPU; it is not evidence of compatibility.
+  gpu_type: null
+  runtime_image: /srv/lab/job_console/releases/containers/APPROVED_TRAINING.sif
+  runtime_sha256: REPLACE_WITH_TESTED_TRAINING_RUNTIME_SHA256
+  runtime_unsquash: false
+  # The training initialization checkpoint is resolved from dataset_v2.hashes.head;
+  # extraction-only checkpoint_path/checkpoint_sha256 are not needed here.
+queue_limit: 100
+max_source_bytes: 52428800
+max_input_bytes: 52428800
+# Larger checkpoints are retained on the cluster even if not cached for download.
+max_artifact_bytes: 10485760
+max_run_artifact_bytes: 52428800
+max_cache_bytes: 1073741824
+min_free_bytes: 268435456
+log_tail_bytes: 65536

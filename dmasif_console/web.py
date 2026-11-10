@@ -1,6 +1,6 @@
 """Public read-only dashboard and a signed, durable GitHub webhook receiver.
 
-Run views read cached state; dataset discovery makes a fixed read-only SSH query.
+All browser views read cached state, including paginated training metrics.
 Web and worker share the same backend filesystem and secret-access boundary.
 """
 from __future__ import annotations
@@ -13,18 +13,17 @@ import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import BoundedSemaphore
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .config import Settings, load_settings
-from .datasets import DatasetDiscoveryError, fetch_dataset_files, fetch_datasets
 from .db import DeliveryConflict, Store
 from .supervisor import maintenance_enabled, supervisor_healthy
+from .training import event_page, iter_events
 
 
 STATUS_LABELS = {
@@ -41,7 +40,7 @@ PUBLIC_RUN_FIELDS = {
     "id", "display_id", "actor_login", "actor_id", "experiment", "branch", "commit_sha", "commit_url",
     "dataset_id", "state", "reason", "created_at", "updated_at", "submitted_at", "started_at", "ended_at",
     "capacity_reserved", "log_tail", "monitor_error",
-    "scheduler_job_id",
+    "scheduler_job_id", "training", "telemetry_error",
 }
 PROVENANCE_FIELDS = {
     "source_commit", "source_sha256", "archive_sha256", "runtime_sha256", "checkpoint_sha256", "adapter_version",
@@ -77,6 +76,9 @@ def _redact(value, settings: Settings, run: dict | None = None):
         if scope.get("dataset"):
             datasets = {"selected": scope["dataset"]}
         for dataset in datasets.values():
+            for key in ("project_root", "source_prefix"):
+                if isinstance(dataset.get(key), str):
+                    replacements.add(dataset[key])
             for entry in dataset.get("entries", []):
                 if isinstance(entry.get("path"), str):
                     replacements.add(entry["path"])
@@ -89,9 +91,15 @@ def _redact(value, settings: Settings, run: dict | None = None):
 
 def public_run(run: dict, settings: Settings) -> dict:
     result = {k: run.get(k) for k in PUBLIC_RUN_FIELDS}
+    training = run.get("training")
+    result["training"] = {k: training[k] for k in (
+        "phase", "step", "total_steps", "optimizer_updates", "last_event_at", "latest_metrics",
+        "latest_evaluation", "checkpoints", "event_count", "complete_reason", "invalid_events",
+    ) if k in training} if isinstance(training, dict) else None
     result["branch"] = run.get("branch") or (run.get("ref") or "").removeprefix("refs/heads/")
     config = run.get("config") or {}
-    result["config"] = {k: config[k] for k in ("schema_version", "job_type", "dataset_id", "preset_id", "seed", "repeat_id") if k in config}
+    result["config"] = {k: config[k] for k in ("schema_version", "job_type", "dataset_id", "preset_id", "seed", "repeat_id",
+                                              "batch_size", "steps", "eval_every", "save_every") if k in config}
     result["dataset_id"] = run.get("dataset_id") or config.get("dataset_id")
     sha = run.get("commit_sha")
     result["commit_url"] = f"{settings.repository.url}/commit/{sha}" if sha else None
@@ -157,7 +165,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         store.initialize()
     app = FastAPI(title="dMaSIF research console", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.settings, app.state.store = settings, store
-    dataset_queries = BoundedSemaphore(2)
     directory = Path(__file__).parent
     templates = Jinja2Templates(directory=directory / "templates")
     app.mount("/static", StaticFiles(directory=directory / "static"), name="static")
@@ -334,35 +341,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def detail(request: Request, run_id: str):
         return templates.TemplateResponse(request=request, name="detail.html", context={**detail_data(run_id), "settings": public_settings})
 
-    def dataset_query(fetch, *args):
-        # Keep discovery separate from frequent run polling. Every successful
-        # request reads the cluster anew; concurrent visitors cannot spawn an
-        # unbounded number of SSH processes.
-        if not dataset_queries.acquire(blocking=False):
-            raise HTTPException(503, "Dataset discovery is busy. Please retry shortly.",
-                                headers={"Retry-After": "5"})
-        try:
-            return fetch(settings, *args)
-        except DatasetDiscoveryError:
-            raise HTTPException(503, "Could not fetch datasets from the cluster. Please retry.") from None
-        finally:
-            dataset_queries.release()
-
-    @app.get("/api/datasets")
-    def datasets_api():
-        return dataset_query(fetch_datasets)
-
-    @app.get("/api/datasets/files")
-    def dataset_files_api(
-        scope: Literal["registered", "release", "project"],
-        name: str = Query(min_length=1, max_length=128, pattern=r"^[^/\\\x00-\x1f\x7f]+$"),
-        page: int = Query(default=1, ge=1, le=100_000),
-        page_size: int = Query(default=50, ge=1, le=100),
-    ):
-        if name in {".", ".."} or (scope != "registered" and name.startswith(".")):
-            raise HTTPException(422, "Invalid collection name")
-        return dataset_query(fetch_dataset_files, scope, name, page, page_size)
-
     @app.get("/api/runs")
     def runs_api(actor: str = Query(default="", max_length=100), status: str = Query(default="", max_length=40),
                  experiment: str = Query(default="", max_length=200)):
@@ -376,6 +354,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def logs_api(run_id: str):
         data = detail_data(run_id)["run"]
         return {"text": data.get("log_tail") or "", "last_observed_at": data.get("last_observed_at")}
+
+    @app.get("/api/runs/{run_id}/training-events")
+    def training_events_api(
+        run_id: str,
+        kind: Literal["phase", "step", "evaluation", "checkpoint", "complete"] | None = None,
+        before_seq: int | None = Query(default=None, ge=1),
+        step: int | None = Query(default=None, ge=0),
+        limit: int = Query(default=50, ge=1, le=200),
+    ):
+        run = store.get_run(run_id)
+        if run is None:
+            raise HTTPException(404, "Run not found")
+        return _redact(event_page(store, run_id, kind=kind, before_seq=before_seq, step=step, limit=limit), settings, run)
+
+    @app.get("/api/runs/{run_id}/training-events/download")
+    def training_events_download(run_id: str):
+        run = store.get_run(run_id)
+        if run is None:
+            raise HTTPException(404, "Run not found")
+
+        def records():
+            for event in iter_events(store, run_id):
+                yield json.dumps(_redact(event, settings, run), allow_nan=False) + "\n"
+
+        return StreamingResponse(records(), media_type="application/x-ndjson",
+                                 headers={"Content-Disposition": 'attachment; filename="training-metrics.jsonl"'})
 
     @app.get("/artifacts/{artifact_id}")
     def artifact(artifact_id: str):

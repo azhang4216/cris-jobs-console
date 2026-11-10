@@ -1,5 +1,7 @@
 # Real submission acceptance record — October 1–2, 2026
 
+> Historical extraction acceptance evidence. These results do not validate the new training workflow; see [training deployment](training-deployment.md).
+
 **Status: real feature-extraction acceptance passed locally and publicly.** The valid push progressed through waiting, queued, running, validation, and success states. Job `114515` completed on H100 with exit `0:0` in **101 seconds**, producing a checksum-verified `1STP.npz`. Two H100 GPUs were allocated; extraction used one. The invalid configuration test remains correctly rejected with no scheduler job. The first two Blackwell failures remain visible with their original evidence. This verifies the requested submission/results workflow, not full training or permanent hosting. Further submissions remain paused because the two-GPU reservation was authorized for this test only.
 
 ## Setup tested

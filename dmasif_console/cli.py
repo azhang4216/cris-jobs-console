@@ -140,7 +140,7 @@ def main(argv: list[str] | None = None):
     try:
         if args.command == "demo":
             from .demo import prepare_demo
-            config_path = prepare_demo(args.state_dir)
+            config_path = prepare_demo(args.state_dir, training=True)
             os.environ["DMASIF_WEBHOOK_SECRET_FILE"] = str(config_path.parent / "webhook-secret")
             os.environ.pop("DMASIF_WEBHOOK_SECRET", None)
             os.environ.pop("DMASIF_VIEWER_PASSWORD", None)

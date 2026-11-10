@@ -19,7 +19,8 @@ data-state="{{ run.get('state', '') }}" data-observed="{{ run.get('last_observed
   <td><a class="experiment-link" href="/runs/{{ run.get('id', '') }}" title="Run {{ run.get('id', '') }}">{{ run.get('experiment') or 'Untitled experiment' }}</a>{% if run.get('source_kind') == 'slurm' and run.get('scheduler_job_id') %}<span class="cell-secondary">Job {{ run.get('scheduler_job_id') }}</span>{% endif %}</td>
   <td>{{ run.get('actor_login') or ('—' if run.get('source_kind') == 'slurm' else 'Unknown researcher') }}</td>
   <td>{{ commit_link(run) }}</td>
-  <td><span class="dataset-name">{{ run.get('dataset_id') or '—' }}</span></td>
+  {% set training = run.get('training') or {} %}
+  <td class="run-progress">{% if training.get('step') is not none %}<span class="mono">Step {{ training.get('step') }}{% if training.get('total_steps') %} / {{ training.get('total_steps') }}{% endif %}</span><span class="cell-secondary">{{ (training.get('phase') or '')|replace('_', ' ')|capitalize }}</span>{% else %}<span class="muted">{{ 'Waiting for training' if (run.get('config') or {}).get('job_type') == 'dmasif_train' else '—' }}</span>{% endif %}</td>
   <td>{{ status_badge(run.get('state', 'CHECKING_REQUEST'), labels, run) }}</td>
   <td class="nowrap time-cell">{{ timestamp(run.get('submitted_at') if run.get('source_kind') == 'slurm' else run.get('created_at')) }}</td>
   <td class="mono runtime-cell" data-runtime data-start="{{ run.get('started_at') or '' }}" data-end="{{ run.get('ended_at') or '' }}" data-seconds="{{ run.get('runtime_seconds') if run.get('runtime_seconds') is not none else '' }}" {{ monitoring_attributes(run) }}>{% if run.get('runtime_seconds') is not none %}{{ run.get('runtime_seconds') }}s{% if run.get('monitoring_stale') and not run.get('ended_at') %} · last check{% endif %}{% else %}—{% endif %}</td>

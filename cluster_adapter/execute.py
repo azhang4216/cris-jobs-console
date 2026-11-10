@@ -12,10 +12,12 @@ try:
     from .batch import cuda_environment
     from .common import AdapterError, job_id, read_json, utcnow, write_json
     from .validate import publish
+    from .training import invocation, is_training, publish_training
 except ImportError:
     from batch import cuda_environment
     from common import AdapterError, job_id, read_json, utcnow, write_json
     from validate import publish
+    from training import invocation, is_training, publish_training
 
 
 # These exact site GRES/model pairs are known. Arbitrary aliases are not parsed
@@ -95,9 +97,9 @@ def gpu_preflight(job: Path, request: dict, stage: dict, torch) -> dict:
     return report
 
 
-def project_paths(source: Path) -> dict:
+def project_paths(source: Path, names=("dmasif_compat", "Arguments", "model")) -> dict:
     result = {}
-    for name in ("dmasif_compat", "Arguments", "model"):
+    for name in names:
         spec = importlib.util.find_spec(name)
         if spec is None or not spec.origin or source.resolve() not in Path(spec.origin).resolve().parents:
             raise AdapterError(f"Project module {name} does not resolve to the pinned snapshot")
@@ -111,10 +113,13 @@ def main() -> int:
     stage = read_json(directory / "stage.json")
     job = directory / "jobs" / ident
     source = Path("/source")
-    os.chdir(source)
+    training = is_training(request)
+    os.chdir("/dataset" if training else source)
     # Keep installed runtime libraries but remove inherited project paths.
-    sys.path[:] = ["/source/affinity", "/source", "/adapter"] + [value for value in sys.path if value.startswith(("/usr/", "/opt/")) and "site-packages" in value or value.startswith(("/usr/lib/python", "/usr/local/lib/python", "/opt/conda/lib/python"))]
-    modules = project_paths(source)
+    paths = ["/source/src", "/source/dMaSIF", "/adapter"] if training else ["/source/affinity", "/source", "/adapter"]
+    sys.path[:] = paths + [value for value in sys.path if value.startswith(("/usr/", "/opt/")) and "site-packages" in value or value.startswith(("/usr/lib/python", "/usr/local/lib/python", "/opt/conda/lib/python"))]
+    modules = (project_paths(source, ("train", "train_data", "surface_encoder", "dmasif_compat", "Arguments", "model"))
+               if training else project_paths(source))
     import torch
 
     try:
@@ -122,6 +127,21 @@ def main() -> int:
     except AdapterError:
         return 1  # The guard already recorded private evidence and a concise log.
     provenance = {**stage["provenance"], **{key: preflight[key] for key in ("requested_gpu_count", "allocated_gpu_count", "used_gpu_count")}, "project_module_paths": modules, "python": sys.version.split()[0], "torch": torch.__version__, "cuda_runtime": torch.version.cuda, "gpu": preflight["gpu_name"], "gpu_preflight": preflight, "execution": read_json(job / "execution.json")}
+    if training:
+        arguments = invocation(request, job / "training")
+        sys.argv = arguments
+        try:
+            runpy.run_path(arguments[0], run_name="__main__")
+        except SystemExit as exc:
+            if exc.code not in (None, 0):
+                raise
+        for name, expected in modules.items():
+            imported = sys.modules.get(name)
+            if imported is not None and str(Path(imported.__file__).resolve()) != expected:
+                raise AdapterError(f"Project module {name} changed origin during training")
+        publish_training(job / "training", job / "published", provenance,
+                         job / "result-manifest.json", request["config"])
+        return 0
     arguments = [str(source / "affinity" / "extract.py"), "--inputs", str(directory / "input-list.txt"), "--out", str(job / "raw_features"), "--repo", str(source), "--ckpt", "/checkpoint/model.pt", "--seed", str(int(request["config"]["seed"])), "--device", "cuda:0"]
     preset = request["resolved"].get("preset", {})
     arguments.extend(["--max_atoms", str(int(preset.get("max_atoms", 150000))), "--max_proteins", str(int(preset.get("max_proteins", 16)))])

@@ -1,5 +1,7 @@
 # Test real submissions locally
 
+> Historical extraction pilot and acceptance procedure. The current training workflow and its remaining activation steps are documented in [training deployment](training-deployment.md).
+
 The research repository is [azhang4216/dmasif-experiments](https://github.com/azhang4216/dmasif-experiments). Its `main` branch is for development; pushes to `runs/<experiment>` request a run. The dashboard and receiver run together on the application host. Researchers do not receive SSH credentials.
 
 The operator registers immutable input, checkpoint, and container hashes, installs the fixed adapter in a new managed cluster root, and approves numeric GitHub user IDs. The extraction preset uses one registered `1STP.pdb` input, defaults to one requested GPU, and permits an operator-approved two-GPU H100/H200 reservation while extraction uses one device. This site's scheduler rewrites single-GPU requests to RTX 6000 Blackwell, where the frozen runtime failed. An isolated two-H100 test succeeded with the existing runtime, eight CPU cores, 64 GB memory, and a 15-minute limit. The preset has returned to one GPU and new cluster submissions remain paused until the regular allocation policy is settled; see [GPU compatibility](cluster-adapter.md#match-the-runtime-to-the-gpu). Runtime packaging is a separate CPU-only setup job.

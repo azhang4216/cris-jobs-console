@@ -57,6 +57,31 @@ class DatasetConfig(StrictModel):
     description: str = ""
 
 
+class TrainingDatasetConfig(StrictModel):
+    """One operator-registered dataset release; researchers cannot supply paths."""
+    kind: Literal["training"] = "training"
+    project_root: str
+    source_prefix: str = ""
+    hashes: dict[str, str]
+    description: str = "Fixed dataset_v2 training and held-out evaluation"
+
+    @field_validator("project_root", "source_prefix")
+    @classmethod
+    def safe_root(cls, value):
+        if value and (not re.fullmatch(r"/[A-Za-z0-9_./-]+", value) or ".." in Path(value).parts):
+            raise ValueError("training roots must be safe absolute paths")
+        return value.rstrip("/")
+
+    @model_validator(mode="after")
+    def registered_files(self):
+        from cluster_adapter.training import DATASET_FILES
+        if not self.project_root or set(self.hashes) != set(DATASET_FILES):
+            raise ValueError("training dataset requires every fixed dataset_v2 file hash")
+        if any(re.fullmatch(r"[a-f0-9]{64}", value) is None for value in self.hashes.values()):
+            raise ValueError("training dataset hashes must be lowercase SHA-256 digests")
+        return self
+
+
 class PresetConfig(StrictModel):
     gpus: int = Field(default=1, strict=True, ge=1, le=2)
     cpus: int = Field(default=8, ge=1, le=8)
@@ -65,6 +90,15 @@ class PresetConfig(StrictModel):
     qos: Literal["test"] = "test"
     max_atoms: int = Field(default=150_000, ge=1, le=150_000)
     max_proteins: int = Field(default=16, ge=1, le=16)
+
+
+class TrainingPresetConfig(StrictModel):
+    kind: Literal["training"] = "training"
+    gpus: int = Field(default=1, strict=True, ge=1, le=1)
+    cpus: int = Field(default=8, strict=True, ge=1, le=8)
+    memory_gb: int = Field(default=96, strict=True, ge=1, le=96)
+    wall_minutes: int = Field(default=720, strict=True, ge=30, le=720)
+    qos: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]+$")
 
 
 class ClusterConfig(StrictModel):
@@ -135,6 +169,25 @@ class ExperimentConfig(StrictModel):
         return value
 
 
+class TrainingExperimentConfig(StrictModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    schema_version: Literal[1] = 1
+    job_type: Literal["dmasif_train"] = "dmasif_train"
+    dataset_id: Literal["dataset_v2"] = "dataset_v2"
+    preset_id: Literal["training"] = "training"
+    batch_size: int = Field(default=32, ge=2, le=128)
+    steps: int = Field(default=10000, ge=1, le=1000000)
+    eval_every: int = Field(default=125, ge=1, le=1000000)
+    save_every: int = Field(default=125, ge=1, le=1000000)
+    seed: int = Field(default=0, ge=0, le=2**32 - 1)
+    repeat_id: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_.-]+$")
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def integer_schema_version(cls, value):
+        return ExperimentConfig.integer_schema_version(value)
+
+
 class Settings(StrictModel):
     state_dir: Path = Path(".state")
     mode: Literal["fake", "ssh", "observe"] = "fake"
@@ -153,8 +206,8 @@ class Settings(StrictModel):
     viewer_username: str = Field(default="lab", exclude=True)
     viewer_password: str = Field(default="", repr=False, exclude=True)
     webhook_secret: str = Field(default="", repr=False, exclude=True)
-    datasets: dict[str, DatasetConfig] = Field(default_factory=dict)
-    presets: dict[str, PresetConfig] = Field(default_factory=lambda: {"quick-test": PresetConfig()})
+    datasets: dict[str, DatasetConfig | TrainingDatasetConfig] = Field(default_factory=dict)
+    presets: dict[str, PresetConfig | TrainingPresetConfig] = Field(default_factory=lambda: {"quick-test": PresetConfig()})
     cluster: ClusterConfig = Field(default_factory=ClusterConfig)
     queue_limit: int = Field(default=100, ge=1, le=1000)
     max_webhook_bytes: int = Field(default=2 * 1024 * 1024, ge=1024, le=25 * 1024 * 1024)
@@ -170,9 +223,15 @@ class Settings(StrictModel):
     def production_policy(self) -> "Settings":
         if any(type(actor) is not int or actor <= 0 for actor in self.allowed_actor_ids):
             raise ValueError("allowed actors must be positive numeric GitHub IDs")
-        if set(self.presets) != {"quick-test"}:
-            raise ValueError("v1 supports the quick-test preset only")
-        if self.presets["quick-test"].gpus == 2 and self.cluster.gpu_type not in {
+        if not self.presets or set(self.presets) - {"quick-test", "training"}:
+            raise ValueError("only quick-test and training presets are supported")
+        for name, preset in self.presets.items():
+            if (name == "training") != isinstance(preset, TrainingPresetConfig):
+                raise ValueError("training preset requires kind: training")
+        for name, dataset in self.datasets.items():
+            if isinstance(dataset, TrainingDatasetConfig) and name != "dataset_v2":
+                raise ValueError("training accepts only the registered dataset_v2")
+        if self.presets.get("quick-test") and self.presets["quick-test"].gpus == 2 and self.cluster.gpu_type not in {
             "nvidia_h100_80gb_hbm3", "nvidia_h200",
         }:
             raise ValueError("Two-GPU allocation requires an explicit supported H100/H200 GPU type")
@@ -184,7 +243,10 @@ class Settings(StrictModel):
         if self.mode == "ssh":
             if self.repository.clone_url != self.repository.url + ".git":
                 raise ValueError("SSH mode must fetch the configured GitHub repository over HTTPS")
-            for name in ("runtime_image", "runtime_sha256", "checkpoint_path", "checkpoint_sha256"):
+            names = ["runtime_image", "runtime_sha256"]
+            if "quick-test" in self.presets:
+                names += ["checkpoint_path", "checkpoint_sha256"]
+            for name in names:
                 if not getattr(self.cluster, name):
                     raise ValueError(f"SSH mode requires the tested cluster {name}")
             if not self.operator_contact.strip() or self.operator_contact == "Ask your lab operator":

@@ -2,13 +2,21 @@
 
 This guide is for the operator. Researchers use [dmasif-experiments](https://github.com/azhang4216/dmasif-experiments#readme) and the web console; they do not deploy this service or choose dataset paths.
 
-**Status at November 10, 2026:** the source changes are published, the updated dashboard is deployed, and the reviewed training adapter is installed on the cluster. The first `runs/training-smoke` push reached the console but was rejected because the deployed operator configuration did not register `dataset_v2`. No GPU job was submitted. Updating the live configuration, clearing its existing submission pause, and completing GPU acceptance remain pending. The datasets have not been rebuilt or modified.
+**Status at November 10, 2026:** the source changes are published, the dashboard and reviewed cluster adapter are deployed, and the live configuration now enables `dataset_v2` training. The second smoke request submitted one Slurm job, last confirmed pending for priority. Slow SSH session startup is delaying monitoring; real GPU training and evaluation acceptance remain pending. The datasets have not been rebuilt or modified.
 
 ## Why a code deployment does not register the dataset
 
 The application code comes from this repository. On Render, its private dataset/runtime configuration comes from `DMASIF_OPERATOR_YAML`, which bootstrap writes to the file named by `DMASIF_CONFIG`. Redeploying `main` loads the same environment value until the operator updates it. This keeps site-specific paths, approved users, and pinned data/runtime identities under operator control.
 
 The submission pause is separate: it is retained in SQLite across deployments. After installing the runner and updating the configuration, the operator enables `submissions_enabled` and clears the pause with `dmasif-console resume`. A rejected request has no cluster job; retry with a new commit after setup is corrected. Redelivering the same webhook preserves its existing rejected record.
+
+## Recover delayed cluster monitoring
+
+The dashboard reads saved status, logs, and metrics from the application database. A separate worker retrieves updates over SSH. If a scheduler SSH operation fails, the worker keeps the last verified job state and waits 2, 4, 8, then at most 15 minutes between retries. These delays survive application restarts and reset after successful scheduler contact. An explicit operator reconcile still runs immediately. No monitoring retry submits another job.
+
+If SSH authenticates but remote commands never start, inspect the cluster account's shell startup from an already-open terminal. Conda, Micromamba, and module initialization can block on shared-storage access. Ending the local SSH client does not guarantee those remote startup processes exit; backoff reduces repeated attempts but does not repair storage or clean up existing processes.
+
+A targeted workaround can give the console's exact read-only helper commands a minimal environment before expensive initialization. Verify system Python and the Slurm executable paths first, back up the startup file, and preserve environment setup for interactive shells, submission, and batch jobs. The batch launcher still needs `module load apptainer`. A read-only workaround restores monitoring only; new submissions may still require the underlying startup or storage problem to be resolved. Do not resubmit an existing job to recover its dashboard updates.
 
 ## Scientific baseline
 

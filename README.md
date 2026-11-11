@@ -4,7 +4,7 @@ This is the **operator's repository** for the web dashboard and job service.
 
 **To run an experiment, use the [dmasif-experiments README](https://github.com/azhang4216/dmasif-experiments#readme).** Researchers edit code and settings there, push a `runs/*` branch, and follow the run in the web console. They do not need to edit this repository or log in to the VM.
 
-**Release status:** this repository contains the training integration, and the cluster runner is installed. Updating the live operator configuration and completing a real GPU training test are still pending. See the [training deployment guide](docs/training-deployment.md) for activation and GPU acceptance steps.
+**Release status:** training is enabled, the cluster runner is installed, and the first accepted training smoke test has been submitted. Real GPU training and evaluation acceptance are still pending. See the [training deployment guide](docs/training-deployment.md) for verification and monitoring recovery.
 
 ## What the console does
 

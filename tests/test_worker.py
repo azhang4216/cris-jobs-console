@@ -1,5 +1,7 @@
 import hashlib
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -286,6 +288,165 @@ def test_monitoring_failure_preserves_known_state(setup):
     assert run["state"] == "QUEUED"
     assert run["monitor_error"]
     assert run["last_checked_at"]
+
+
+@pytest.fixture
+def monitor_clock(monkeypatch):
+    clock = [datetime(2026, 11, 11, 2, 0, tzinfo=timezone.utc)]
+    monkeypatch.setattr("dmasif_console.worker.now", lambda: clock[0].isoformat())
+    return clock
+
+
+def test_monitoring_backoff_survives_restart_and_resets_after_recovery(setup, monkeypatch, monitor_clock):
+    settings, store, adapter, worker = setup
+    run_id = enqueue(settings, store)
+    worker.tick()
+    original = store.get_run(run_id)
+    original_jobs = store.jobs(run_id)
+    poll = Mock(wraps=adapter.poll)
+    monkeypatch.setattr(adapter, "poll", poll)
+    adapter.fail_poll = True
+    worker.tick()
+    failed = store.get_run(run_id)
+    assert failed["monitor_failure_count"] == 1
+    deadline = datetime.fromisoformat(failed["monitor_retry_after"])
+    assert deadline == monitor_clock[0] + timedelta(seconds=120)
+    assert failed["state"] == original["state"] == "QUEUED"
+    assert failed["capacity_reserved"] is True
+    assert failed["last_checked_at"] == original["last_checked_at"]
+    assert store.jobs(run_id) == original_jobs
+
+    # Read the durable deadline through a new store/worker, not an in-memory flag.
+    restarted = Worker(settings, Store(settings.database_path), adapter)
+    monitor_clock[0] = deadline - timedelta(seconds=1)
+    restarted.tick()
+    assert poll.call_count == 1
+    assert adapter.submit_count == adapter.stage_count == 1
+    monitor_clock[0] = deadline
+    adapter.fail_poll = False
+    restarted.tick()
+    recovered = store.get_run(run_id)
+    assert poll.call_count == 2
+    assert recovered["monitor_failure_count"] == 0
+    assert recovered["monitor_retry_after"] is None
+    assert recovered["monitor_error"] is None
+    assert recovered["state"] == "QUEUED" and recovered["capacity_reserved"] is True
+
+    adapter.fail_poll = True
+    restarted.tick()
+    failed_again = store.get_run(run_id)
+    assert failed_again["monitor_failure_count"] == 1
+    assert datetime.fromisoformat(failed_again["monitor_retry_after"]) == monitor_clock[0] + timedelta(seconds=120)
+    assert adapter.submit_count == 1
+
+
+def test_monitoring_backoff_increases_and_caps_without_contact_before_deadline(setup, monkeypatch, monitor_clock):
+    settings, store, adapter, worker = setup
+    run_id = enqueue(settings, store)
+    worker.tick()
+    poll = Mock(wraps=adapter.poll)
+    monkeypatch.setattr(adapter, "poll", poll)
+    adapter.fail_poll = True
+    for failures, delay in enumerate((120, 240, 480, 900, 900), start=1):
+        worker.tick()
+        run = store.get_run(run_id)
+        assert run["monitor_failure_count"] == failures
+        deadline = datetime.fromisoformat(run["monitor_retry_after"])
+        assert deadline == monitor_clock[0] + timedelta(seconds=delay)
+        monitor_clock[0] = deadline - timedelta(microseconds=1)
+        worker.tick()
+        assert poll.call_count == failures
+        assert run["state"] == "QUEUED" and run["capacity_reserved"] is True
+        monitor_clock[0] = deadline
+    assert adapter.submit_count == 1
+
+
+def test_unknown_submission_reconciliation_backs_off_without_resubmission(setup, monkeypatch, monitor_clock):
+    settings, store, adapter, worker = setup
+    run_id = enqueue(settings, store)
+    adapter.ambiguous = True
+    worker.tick()
+    reconcile = Mock(side_effect=TransportError("session startup unavailable"))
+    monkeypatch.setattr(adapter, "reconcile", reconcile)
+    worker.tick()
+    worker.tick()
+    run = store.get_run(run_id)
+    assert reconcile.call_count == 1
+    assert run["monitor_failure_count"] == 1
+    assert run["state"] == "SUBMISSION_UNKNOWN" and run["capacity_reserved"] is True
+    assert adapter.submit_count == 1
+
+
+def test_operator_reconcile_bypasses_automatic_monitoring_backoff(setup, monkeypatch, monitor_clock):
+    settings, store, adapter, worker = setup
+    run_id = enqueue(settings, store)
+    worker.tick()
+    adapter.fail_poll = True
+    worker.tick()
+    adapter.fail_poll = False
+    poll = Mock(wraps=adapter.poll)
+    monkeypatch.setattr(adapter, "poll", poll)
+    worker.reconcile(run_id, "operator", "Verify recovered SSH startup")
+    assert poll.call_count == 1
+    assert store.get_run(run_id)["monitor_retry_after"] is None
+    assert any(event["kind"] == "operator_reconcile" for event in store.events(run_id))
+    assert adapter.submit_count == 1
+
+
+def test_operator_cancel_bypasses_automatic_monitoring_backoff(setup, monkeypatch, monitor_clock):
+    settings, store, adapter, worker = setup
+    run_id = enqueue(settings, store)
+    worker.tick()
+    adapter.fail_poll = True
+    worker.tick()
+    adapter.fail_poll = False
+    cancel = Mock(side_effect=lambda run: adapter.complete("CANCELLED", "0:15"))
+    monkeypatch.setattr(adapter, "cancel", cancel, raising=False)
+    worker.cancel(run_id, "operator", "Cancel the existing job")
+    assert cancel.call_count == 1
+    assert cancel.call_args.args[0]["jobs"][0]["job_id"] == "17"
+    assert store.get_run(run_id)["state"] == "CANCELLED"
+    assert store.get_run(run_id)["monitor_retry_after"] is None
+    assert adapter.submit_count == 1
+
+
+def test_monitoring_backoff_clears_even_when_optional_metrics_and_logs_fail(setup, monkeypatch, monitor_clock):
+    settings, store, adapter, worker = setup
+    run_id = enqueue(settings, store)
+    worker.tick()
+    adapter.fail_poll = True
+    worker.tick()
+    run = store.get_run(run_id)
+    store.update_run(run_id, {"config": {**run["config"], "job_type": "dmasif_train"}})
+    monitor_clock[0] = datetime.fromisoformat(run["monitor_retry_after"])
+    monkeypatch.setattr(adapter, "telemetry", Mock(side_effect=TransportError("metrics unavailable")), raising=False)
+    monkeypatch.setattr(adapter, "logs", Mock(side_effect=TransportError("logs unavailable")))
+    poll = Mock(wraps=adapter.poll)
+    monkeypatch.setattr(adapter, "poll", poll)
+    adapter.fail_poll = False
+    worker.tick()
+    recovered = store.get_run(run_id)
+    assert recovered["monitor_failure_count"] == 0 and recovered["monitor_retry_after"] is None
+    assert recovered["monitor_error"] is None
+    assert recovered["telemetry_error"]
+    worker.tick()
+    assert poll.call_count == 2
+    assert adapter.submit_count == 1
+
+
+def test_unexpected_monitoring_error_does_not_create_transport_backoff(setup, monkeypatch, monitor_clock):
+    settings, store, adapter, worker = setup
+    run_id = enqueue(settings, store)
+    worker.tick()
+    poll = Mock(side_effect=RuntimeError("unexpected implementation error"))
+    monkeypatch.setattr(adapter, "poll", poll)
+    worker.tick()
+    worker.tick()
+    assert poll.call_count == 2
+    run = store.get_run(run_id)
+    assert run["monitor_error"] and not run.get("monitor_retry_after")
+    assert run["state"] == "QUEUED" and run["capacity_reserved"] is True
+    assert adapter.submit_count == 1
 
 
 def test_single_worker_lock(setup):

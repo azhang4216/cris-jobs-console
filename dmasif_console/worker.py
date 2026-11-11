@@ -1,7 +1,7 @@
 """Single-worker durable orchestration. Submission is never retried blindly."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import fcntl
 import hashlib
 import os
@@ -12,10 +12,11 @@ import time
 from .db import Store
 from .backups import AutomaticBackups
 from .sources import ExperimentConfigError, SourceError, read_experiment, sha256_file, snapshot_source
-from .transport import PreparationError, SubmissionUncertain, get_adapter
+from .transport import PreparationError, SubmissionUncertain, TransportError, get_adapter
 
 ACTIVE = {"PREPARING", "SUBMITTING", "SUBMISSION_UNKNOWN", "QUEUED", "RUNNING", "VALIDATING_RESULTS", "NEEDS_REVIEW"}
 TERMINAL = {"COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "OUT_OF_MEMORY", "NODE_FAIL", "PREEMPTED", "BOOT_FAIL", "DEADLINE", "REVOKED"}
+MONITOR_RETRY_SECONDS = (120, 240, 480, 900)
 
 
 def now() -> str:
@@ -83,7 +84,8 @@ class Worker:
         # Monitoring never stops when new submissions are paused.
         for run in self.store.list_runs(limit=10000):
             if run.get("capacity_reserved") and run["state"] in ACTIVE and run["state"] != "PREPARING":
-                self._monitor(run)
+                if self._monitor_due(run):
+                    self._monitor(run)
         for run in self.store.list_runs(limit=10000):
             if (run.get("config", {}).get("job_type") == "dmasif_train"
                     and not run.get("capacity_reserved") and run.get("result")
@@ -247,13 +249,37 @@ class Worker:
             return self.store.update_run(run["id"], {"telemetry_error": "Training progress is temporarily unavailable; retained events and job status are unchanged.",
                                                       "telemetry_eof": False})
 
+    def _monitor_due(self, run: dict) -> bool:
+        retry_after = run.get("monitor_retry_after")
+        if not retry_after:
+            return True
+        try:
+            return datetime.fromisoformat(now()) >= datetime.fromisoformat(retry_after)
+        except (TypeError, ValueError):
+            # A malformed legacy record must not permanently disable monitoring.
+            return True
+
     def _monitor(self, run: dict, *, reserve_unknown: bool = True):
         run = {**run, "jobs": self.store.jobs(run["id"])}
         try:
-            if run["state"] in {"SUBMITTING", "SUBMISSION_UNKNOWN", "NEEDS_REVIEW"}:
-                jobs = self.adapter.reconcile(run)
-            else:
-                jobs = self.adapter.poll(run)
+            try:
+                if run["state"] in {"SUBMITTING", "SUBMISSION_UNKNOWN", "NEEDS_REVIEW"}:
+                    jobs = self.adapter.reconcile(run)
+                else:
+                    jobs = self.adapter.poll(run)
+            except TransportError:
+                failures = run.get("monitor_failure_count", 0) + 1
+                delay = MONITOR_RETRY_SECONDS[min(failures - 1, len(MONITOR_RETRY_SECONDS) - 1)]
+                retry_after = datetime.fromisoformat(now()) + timedelta(seconds=delay)
+                # Terminating a local SSH client does not guarantee its blocked
+                # remote startup processes exit. Persist the delay so worker
+                # restarts cannot immediately create another stalled session.
+                self._update(run, monitor_failure_count=failures, monitor_retry_after=retry_after.isoformat(),
+                             monitor_error="Cluster monitoring is temporarily unavailable; last known state retained.")
+                return
+            # Scheduler contact succeeded. Optional metrics/log failures below
+            # must not delay the next authoritative scheduler check.
+            run = self._update(run, monitor_failure_count=0, monitor_retry_after=None)
             if not jobs:
                 if not self.store.jobs(run["id"]):
                     self._update(run, state="SUBMISSION_UNKNOWN", capacity_reserved=run.get("capacity_reserved", False) or reserve_unknown,
